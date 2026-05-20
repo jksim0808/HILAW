@@ -82,7 +82,7 @@ def run_monitoring():
         df['volatility'] = ((df['stck_hgpr'] - df['stck_lwpr']) / df['stck_prpr'] * 100).round(2)
         
         # 조건: 거래대금 50억 이상 & 변동폭 10% 이상
-        target_stocks = df[(df['acml_tr_pbmn'] >= 50) & (df['volatility'] >= 10.0)]
+        target_stocks = df[(df['acml_tr_pbmn'] >= 200) & (df['volatility'] >= 3.0)]
         
         for _, row in target_stocks.iterrows():
             code = row['mkte_ticker']
@@ -96,7 +96,7 @@ def run_monitoring():
                 continue
                 
             # 1. 텔레그램 발송
-            msg = f"🔥 [변동폭 10% 돌파] 🔥\n\n📌 종목명: {name} ({code})\n📈 현재가: {price:,}원\n⚡ 변동폭: {vol}%\n💰 거래대금: {money:,}억"
+            msg = f"🔥 [ 주도주 포착 - 변동폭 3% / 거래대금 200억 돌파] 🔥\n\n📌 종목명: {name} ({code})\n📈 현재가: {price:,}원\n⚡ 변동폭: {vol}%\n💰 거래대금: {money:,}억"
             asyncio.run(send_telegram_msg(msg))
             st.session_state['sent_stocks'].add(code)
             
