@@ -138,10 +138,10 @@ countdown = 0
 while True:
     current_time_str = datetime.now(KST).strftime('%H:%M:%S')
     
-    # 10분(600초)마다 한투 API 호출
+    # 1분(60초)마다 한투 API 호출
     if countdown <= 0:
         run_monitoring()
-        countdown = 600 # 10분 타이머 리셋
+        countdown = 60 # 1분 타이머 리셋
 
     # 데이터가 있으면 화면에 표(Table) 출력
     if st.session_state['detected_list']:
