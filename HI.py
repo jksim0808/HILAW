@@ -125,13 +125,13 @@ with col2:
     st.metric(label="오늘 포착된 총 종목 수", value=f"{len(st.session_state['detected_list'])} 개")
 
 st.markdown("---")
-st.subheader("🎯 포착된 고변동성 종목 리스트 (10분마다 갱신)")
+st.subheader("🎯 포착된 고변동성 종목 리스트 (1분마다 갱신)")
 
 # 실시간으로 변하는 표를 그려줄 빈 공간(Placeholder) 생성
 table_placeholder = st.empty()
 info_placeholder = st.empty()
 
-# 무한 루프를 돌며 10분(600초)마다 데이터 갱신 및 화면 리프레시
+# 무한 루프를 돌며 1분(60초)마다 데이터 갱신 및 화면 리프레시
 # 테스트를 위해 코드를 켜자마자 바로 한 번 실행하게 유도
 countdown = 0
 
@@ -148,7 +148,7 @@ while True:
         display_df = pd.DataFrame(st.session_state['detected_list'])
         table_placeholder.data_editor(display_df, use_container_width=True, hide_index=True)
     else:
-        table_placeholder.info("아직 조건(변동폭 10% 이상 & 거래대금 50억 이상)을 만족하는 종목이 없습니다. 시장을 감시 중입니다...")
+        table_placeholder.info("아직 조건(변동폭 3% 이상 & 거래대금 200억 이상)을 만족하는 종목이 없습니다. 시장을 감시 중입니다...")
 
     # 하단에 다음 갱신까지 남은 시간 표시
     info_placeholder.text(f"⏱️ 최근 동기화 시간: {current_time_str} | 다음 자동 조회까지 {countdown}초 남음...")
