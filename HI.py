@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 # =====================================================================
 st.set_page_config(page_title="장중 실시간 주도주 마스터 스캐너 Pro", layout="wide")
 
-# 🛡️ Secrets 내부 키값으로만 다이렉트 매핑 (유령 공백 제거 포함)
+# Secrets 내부 키값으로만 다이렉트 매핑
 APP_KEY = st.secrets.get("HANTU_APP_KEY", "").strip()
 APP_SECRET = st.secrets.get("HANTU_APP_SECRET", "").strip()
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "").strip()
@@ -79,7 +79,6 @@ class HantuPureSpeedEngine:
     def fetch_market_pool_by_indices(self, token):
         pool = []
         
-        # 한투 실전망 공식 거래량/거래대금 상위 창구 타격
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
             "content-type": "application/json; charset=utf-8", 
@@ -95,7 +94,7 @@ class HantuPureSpeedEngine:
             "FID_COND_SCR_DIV_CODE": "20171",
             "FID_INPUT_ISCD": "0000", 
             "FID_DIV_CLS_CODE": "0", 
-            "FID_SORT_CLS_CODE": "4",       # 4: 거래대금 순위 정렬 고정
+            "FID_SORT_CLS_CODE": "4",       
             "FID_BLNG_CLS_CODE": "0",
             "FID_TRGT_CLS_CODE": "00000000",
             "FID_TRGT_EXCL_CLS_CODE": "00000000",
@@ -114,7 +113,6 @@ class HantuPureSpeedEngine:
                     if not t_code.isdigit(): continue
                     
                     name = str(item.get("hts_kor_isnm", item.get("data_name", ""))).strip()
-                    # 단타 효율 극대화를 위해 거래 패널티를 가진 우회 자산(스팩, 리츠 등) 필터링
                     if any(k in name for k in ["스팩", "리츠", "인버스", "레버리지", "KODEX", "TIGER"]): continue
                     
                     p_str_raw = "".join(filter(str.isdigit, str(item.get("stck_prpr", "0"))))
@@ -124,20 +122,22 @@ class HantuPureSpeedEngine:
                     stat = str(item.get("iscd_stat_cls_code", "00")).strip()
                     raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
                     
-                    # 단타 진입 시 호가 공백이 심한 초소형 동전주(5,000원 이하) 필터링 탈락
-                    if price < 5000: continue
-                    if ctrt <= 0.0: continue # 마이너스 및 보합 종목 전면 파쇄 (오직 양봉만)
+                    # ⚡ [하이패스 핵심 수술]: SK하이닉스와 삼성전자는 마이너스 주가여도 무조건 패스 (컷 탈락 면제)
+                    is_super_stock = ("SK하이닉스" in name or "삼성전자" in name)
+                    
+                    if price < 5000 and not is_super_stock: continue
+                    if ctrt <= 0.0 and not is_super_stock: continue 
                     
                     pool.append((rank_idx + 1, t_code, name, ctrt, raw_amt, stat))
         except Exception as e:
             st.session_state.net_log = f"❌ 데이터 조회망 패킷 통신 무너짐: {str(e)}"
 
-        st.session_state.net_log = f"🟢 한투 실전망 실시간 대장주 순수 동기화 완료! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
-        pool.sort(key=lambda x: x[0]) # 한투 공식 순위 우선 정렬
+        st.session_state.net_log = f"🟢 한투 실전망 대장주 순수 동기화 완료! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
+        pool.sort(key=lambda x: x[0]) 
         return pool
 
 # =====================================================================
-# ⚡ [상시 표출 시스템]: 사용자가 들어오자마자 무조건 라이브 수급 데이터 로드
+# ⚡ [상시 표출 시스템]
 # =====================================================================
 def force_sync_load():
     engine = HantuPureSpeedEngine()
@@ -170,7 +170,7 @@ if btn_fetch:
         st.rerun()
 
 # =====================================================================
-# 📊 [상단 구역] 플러스 상승 우량주 전용 종합 수급 표
+# 📊 [상단 구역] 종합 수급 표
 # =====================================================================
 st.markdown("### 📊 당일 실시간 상승(+) 주도주 마스터 종합 순위표 (순수 수급 관제 모드)")
 
@@ -186,11 +186,15 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             elif stat == "51": stat_prefix = "[❌관리] "
             elif stat == "57": stat_prefix = "[🔥경고] "
 
-            # ⚡ [수술 완료]: 특정 종목 조건문을 완전히 폐기하고 순수 대금 크기로 등급 부여
+            # ⚡ 문구 최적화 및 등락률 부호 조건 스케일 보정
             if raw_rank <= 20 and ctrt >= 4.0:
                 display_name = f"🔥[우량주도-최강] {stat_prefix}{n}"
                 rank_grade = "🔥 1단계: A급 (시세 강력 분출)"
                 action_tag = "🚀 대한민국 시장 자금을 가장 빠르게 빨아들이는 핵심 대장 (최우선 타깃)"
+            elif "SK하이닉스" in n or "삼성전자" in n:
+                display_name = f"🏛️[시장지수-대장] {stat_prefix}{n}"
+                rank_grade = "📊 지수 연동형 메가크라운 대형주"
+                action_tag = "⚡ 대한민국 증시의 든든한 버팀목 (지수 방향성 및 대형 호가 단타 추적용)"
             else:
                 display_name = f"{stat_prefix}{n}"
                 rank_grade = "⚡ 2단계: B급 (견고한 거래량 쏠림)"
@@ -204,7 +208,7 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
                 "종목명": display_name,
                 "수급 등급 분류": rank_grade,
                 "현재가": f"⬇️ 하단 실시간 오리지널 차트에서 정품 가격 즉시 연동",
-                "등락률": f"{ctrt:+.2f}%",
+                "등락률": f"{ctrt:+.2f}%" if ctrt > 0 else f"{ctrt:.2f}%",
                 "당일 누적대금": amt_display,
                 "실전 행동 지침": action_tag
             })
@@ -216,8 +220,6 @@ selected_name = None
 
 if not df_final.empty:
     df_final.insert(0, "선택", False)
-    
-    # ⚡ 첫 줄 종목에 기본 무조건 체크 가동 (초기 차트 표출 세팅)
     df_final.loc[0, "선택"] = True
 
     edited_df = st.data_editor(
