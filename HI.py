@@ -58,7 +58,6 @@ class HantuPureSpeedEngine:
             except:
                 pass
 
-        # 🛠️ [긴급 수술 완료] 주소창 오타 수정 -> koreainvestment 정품망 정상 도킹
         url = "https://openapi.koreainvestment.com/oauth2/tokenP"
         body = {
             "grant_type": "client_credentials", 
@@ -81,7 +80,7 @@ class HantuPureSpeedEngine:
             st.session_state.net_log = "🔌 한투 해외 IP 격리벽 감지 -> 2중 가상 우회 채널로 무중단 수급 소싱 전환"
         return "BYPASS_MODE"
 
-    def fetch_live_foreigner_future(self, token):
+    def fetch_live_foreigner_future(self):
         try:
             bypass_url = "https://finance.naver.com/sise/sise_trans_style.naver"
             r = self.session.get(bypass_url, timeout=3.5)
@@ -100,45 +99,29 @@ class HantuPureSpeedEngine:
             pass
 
     def fetch_single_stock_backup(self, token, query_code):
-        if token == "BYPASS_MODE":
-            try:
-                url = f"https://finance.naver.com/item/main.naver?code={query_code}"
-                r = self.session.get(url, timeout=2.5)
-                if r.status_code == 200:
-                    p_match = re.search(r'class=\"no_today\".*?class=\"blind\">([\d,]+)', r.text, re.DOTALL)
-                    r_match = re.search(r'class=\"no_exday\".*?class=\"blind\">([+-]?[\d,.]+)', r.text, re.DOTALL)
-                    if p_match:
-                        price = int(p_match.group(1).replace(",", ""))
-                        ctrt = float(r_match.group(1).strip()) if r_match else 0.0
-                        return {"price": price, "ctrt": ctrt, "amt": 50000000000, "stat": "00"}
-            except: pass
-            return None
-            
-        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
-        headers = {
-            "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
-            "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01010000", "custtype": "P"
-        }
-        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": query_code}
         try:
-            r = self.session.get(url, headers=headers, params=params, timeout=2.5)
+            url = f"https://finance.naver.com/item/main.naver?code={query_code}"
+            r = self.session.get(url, timeout=2.5)
             if r.status_code == 200:
-                out = r.json().get("output", {})
-                if out:
-                    p_str = "".join(filter(str.isdigit, str(out.get("stck_prpr", "0"))))
-                    price = int(p_str) if p_str else 0
-                    ctrt = float(out.get("prdy_ctrt", 0.0))
-                    stat = str(out.get("iscd_stat_cls_code", "00")).strip()
-                    v_str = "".join(filter(str.isdigit, str(out.get("acml_tr_pbmn", "0"))))
-                    raw_amt = float(v_str) if v_str else 0.0
-                    return {"price": price, "ctrt": ctrt, "amt": raw_amt, "stat": stat}
+                p_match = re.search(r'class=\"no_today\".*?class=\"blind\">([\d,]+)', r.text, re.DOTALL)
+                r_match = re.search(r'class=\"no_exday\".*?class=\"blind\">([+-]?[\d,.]+)', r.text, re.DOTALL)
+                if p_match:
+                    price = int(p_match.group(1).replace(",", ""))
+                    ctrt = float(r_match.group(1).strip()) if r_match else 0.0
+                    return {"price": price, "ctrt": ctrt, "amt": 50000000000, "stat": "00"}
         except: pass
         return None
 
     def fetch_market_pool_by_indices(self, token):
-        self.fetch_live_foreigner_future(token)
+        """⚡ [변수 바인딩 수술 완료] 선물 데이터 독립 격리 및 순정 주도주 피드 완벽 복구"""
+        # 선물 수급은 독자적인 데이터 파이프라인으로 처리
+        self.fetch_live_foreigner_future()
+        
+        pool = []
+        rank_map = {}
+        
+        # 만약 한투망 토큰 에러 시 무중단 하이브리드 백업 스위칭 가동
         if token == "BYPASS_MODE" or not token:
-            pool = []
             try:
                 watchlist = [
                     ("005930", "삼성전자"), ("000660", "SK하이닉스"), ("005380", "현대차"),
@@ -152,12 +135,12 @@ class HantuPureSpeedEngine:
             except: 
                 return st.session_state.last_pool
 
-        pool = []
-        rank_map = {}
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
-            "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
-            "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01710000", "custtype": "P"
+            "content-type": "application/json; charset=utf-8", 
+            "authorization": f"Bearer {token}",
+            "appkey": APP_KEY, "appsecret": APP_SECRET, 
+            "tr_id": "FHPST01710000", "custtype": "P"
         }
         params_vol = {
             "FID_COND_MRKT_DIV_CODE": "J", "FID_COND_SCR_DIV_CODE": "20171",
@@ -166,15 +149,17 @@ class HantuPureSpeedEngine:
             "FID_INPUT_PRICE_1": "0", "FID_INPUT_PRICE_2": "0", "FID_VOL_CNT": "", "FID_INPUT_DATE_1": ""          
         }
         try:
-            r = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=3.5)
-            if r.status_code == 200:
-                vol_output = r.json().get("output", [])
+            r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=3.5)
+            if r_vol.status_code == 200:
+                vol_output = r_vol.json().get("output", [])
                 mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
+                
                 for rank_idx, item in enumerate(vol_output):
                     t_code = str(item.get("mksc_shrn_iscd", "")).strip()[-6:]
                     if not t_code.isdigit(): continue
                     name = str(item.get("hts_kor_isnm", item.get("data_name", ""))).strip()
                     if any(k in name for k in ["스팩", "리츠", "인버스", "레버리지", "KODEX", "TIGER"]): continue
+                    
                     p_str_raw = "".join(filter(str.isdigit, str(item.get("stck_prpr", "0"))))
                     price = int(p_str_raw) if p_str_raw else 0
                     ctrt = float(str(item.get("prdy_ctrt", "0.0")).strip())
@@ -192,8 +177,22 @@ class HantuPureSpeedEngine:
                 for b_code, b_name in watchlist_backups:
                     if b_code not in rank_map:
                         time.sleep(0.1) 
-                        b_res = self.fetch_single_stock_backup(token, b_code)
-                        if b_res: pool.append((999, b_code, b_name, b_res["price"], b_res["ctrt"], b_res["amt"], b_res["stat"]))
+                        # 백업 패스 우회 라인 매핑
+                        url_single = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
+                        headers_s = {"content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}", "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01010000", "custtype": "P"}
+                        params_s = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": b_code}
+                        try:
+                            r_s = self.session.get(url_single, headers=headers_s, params=params_s, timeout=2.0)
+                            if r_s.status_code == 200:
+                                out_s = r_s.json().get("output", {})
+                                if out_s:
+                                    p_s = int("".join(filter(str.isdigit, str(out_s.get("stck_prpr", "0")))))
+                                    c_s = float(out_s.get("prdy_ctrt", 0.0))
+                                    v_s = float("".join(filter(str.isdigit, str(out_s.get("acml_tr_pbmn", "0")))))
+                                    st_s = str(out_s.get("iscd_stat_cls_code", "00")).strip()
+                                    pool.append((999, b_code, b_name, p_s, c_s, v_s, st_s))
+                        except: pass
+
                 st.session_state.net_log = f"🟢 한투 실전망 대장주 순수 동기화 완료! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
                 pool.sort(key=lambda x: x[0])
                 return pool
@@ -202,12 +201,14 @@ class HantuPureSpeedEngine:
         return st.session_state.last_pool
 
 # =====================================================================
-# ⚡ [상시 표출 시스템 브릿지]
+# ⚡ [상시 표출 시스템 브릿지 - 데이터 강제 결속]
 # =====================================================================
 engine = HantuPureSpeedEngine()
 token = engine.get_token()
 res_pool = engine.fetch_market_pool_by_indices(token)
-if res_pool: st.session_state.last_pool = res_pool
+# 가져온 알짜배기 정순위 수급 pool 리스트를 세션 상태에 100% 강제 도킹
+if res_pool and len(res_pool) > 0: 
+    st.session_state.last_pool = res_pool
 
 # =====================================================================
 # 📡 [상단 구역] 네이버 오리지널 실시간 캔들 시황판 이식
@@ -308,7 +309,7 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             is_mega_cap = (t in mega_cap_codes or "하이닉스" in n or "삼성전자" in n or "현대차" in n)
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
-            # 🛠️ 상위 50위권 내 쌩쌩한 양봉(+3% 이상)이면 제한 없이 대장주 전원 무조건 포획 연사
+            # 🛠️ 상위 50위권 내 양봉(+3% 이상)이면 제한 없이 대장주 전원 단타 타깃 무조건 연사
             if raw_rank <= 50 and (ctrt >= 3.0) and not is_mega_cap:
                 scalping_targets.append({
                     "포착순위": f"🔥 {len(scalping_targets) + 1}순위", "종목코드": t,
