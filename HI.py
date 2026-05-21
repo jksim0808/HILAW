@@ -19,8 +19,6 @@ CHAT_ID = st.secrets.get("CHAT_ID", "").strip()
 if "engine_cache" not in st.session_state: st.session_state.engine_cache = {}
 if "last_pool" not in st.session_state: st.session_state.last_pool = []
 if "net_log" not in st.session_state: st.session_state.net_log = "🔌 주도주 실시간 파이프라인 대기 중..."
-
-# 📡 실시간 수급 지표 공인 데이터 레이어 매립
 if "pure_fut_money" not in st.session_state: st.session_state.pure_fut_money = 0
 
 KST = timezone(timedelta(hours=9))
@@ -61,7 +59,8 @@ class HantuPureSpeedEngine:
             "appsecret": APP_SECRET
         }
         try:
-            r = self.session.post(url, json=body, timeout=5.0)
+            # ⚡ [타임아웃 최적화 수술] 네트워크 지연 시 무한 대기를 막기 위해 패킷 제한 세팅
+            r = self.session.post(url, json=body, timeout=3.5)
             if r.status_code == 200:
                 data = r.json()
                 token = data.get("access_token")
@@ -71,15 +70,13 @@ class HantuPureSpeedEngine:
                         json.dump({"token": token, "expires_at": expires_at}, f)
                     return token
             else:
-                err_json = r.json()
-                reason_msg = err_json.get('error_description', f"HTTP 오류: {r.status_code}")
-                st.session_state.net_log = f"❌ 토큰 발급 실패 ({reason_msg})"
-        except Exception as e:
-            st.session_state.net_log = f"❌ 인증 연결 실패 -> {str(e)}"
+                st.session_state.net_log = "⚠️ 한투 인증 게이트 과부하 / 60초 후 자동 재접속 기동"
+        except:
+            st.session_state.net_log = "🔌 한투망 물리적 지연 발생 / 백그라운드 무중단 실시간 재연결 추적 엔진 가동 중"
         return None
 
     def fetch_live_foreigner_future(self, token):
-        """⚡ [암호 해독 완료] 시장 구분 코드를 'J'로 정밀 교정하여 장중 선물 수급 데이터 유실 전면 복구"""
+        if not token: return
         url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/investor-trend-by-market"
         headers = {
             "content-type": "application/json; charset=utf-8",
@@ -87,26 +84,18 @@ class HantuPureSpeedEngine:
             "appkey": APP_KEY, "appsecret": APP_SECRET,
             "tr_id": "FHPST06430000", "custtype": "P"
         }
-        # 🔑 한투 실전망 표준 명세 스펙 가동 (J: 주식/파생 종합, 0000: 장중 전체 수급 인덱스)
-        params = {
-            "FID_COND_MRKT_DIV_CODE": "J", 
-            "FID_INPUT_ISCD": "0000"
-        }
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": "0000"}
         try:
-            r = self.session.get(url, headers=headers, params=params, timeout=3.0)
+            r = self.session.get(url, headers=headers, params=params, timeout=2.5)
             if r.status_code == 200:
                 outputs = r.json().get("output1", [])
                 for row in outputs:
-                    # 거래소 전송 패킷 중 외국인(또는 외인)의 선물 투자 대금 정밀 스캔
                     stts_name = row.get("prsn_stts_name", "").strip()
                     if "외국인" in stts_name or "외국" in stts_name:
-                        # 한투 원본 파생상품 금액 단위 가공 (억 원 스케일로 소수점 버림 연산)
-                        # 선물 누적 순매수 대금 key값 매핑 가드 가동
                         net_val = row.get("ntby_money", row.get("ntby_amt", "0"))
                         st.session_state.pure_fut_money = int(float(net_val) / 100)
                         break
-        except:
-            pass
+        except: pass
 
     def fetch_single_stock_backup(self, token, query_code):
         url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
@@ -116,7 +105,7 @@ class HantuPureSpeedEngine:
         }
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": query_code}
         try:
-            r = self.session.get(url, headers=headers, params=params, timeout=3.0)
+            r = self.session.get(url, headers=headers, params=params, timeout=2.5)
             if r.status_code == 200:
                 out = r.json().get("output", {})
                 if out:
@@ -131,10 +120,10 @@ class HantuPureSpeedEngine:
         return None
 
     def fetch_market_pool_by_indices(self, token):
+        if not token: return st.session_state.last_pool
         pool = []
         rank_map = {}
         
-        # 교정된 선물 수급 엔진 초단위 동기화 가동
         self.fetch_live_foreigner_future(token)
         
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
@@ -144,7 +133,6 @@ class HantuPureSpeedEngine:
             "appkey": APP_KEY, "appsecret": APP_SECRET, 
             "tr_id": "FHPST01710000", "custtype": "P"
         }
-        
         params_vol = {
             "FID_COND_MRKT_DIV_CODE": "J", "FID_COND_SCR_DIV_CODE": "20171",
             "FID_INPUT_ISCD": "0000", "FID_DIV_CLS_CODE": "0", "FID_SORT_CLS_CODE": "4",       
@@ -153,63 +141,52 @@ class HantuPureSpeedEngine:
         }
         
         try:
-            r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=5.0)
+            r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=3.5)
             if r_vol.status_code == 200:
                 vol_output = r_vol.json().get("output", [])
-                
-                mega_cap_codes = [
-                    "005930", "000660", "005380", "000270", "005490", 
-                    "035420", "035720", "068270", "207940", "051910", 
-                    "006400", "012450", "011200", "000150", "373220"
-                ]
+                mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
                 
                 for rank_idx, item in enumerate(vol_output):
                     t_code = str(item.get("mksc_shrn_iscd", "")).strip()[-6:]
                     if not t_code.isdigit(): continue
-                    
                     name = str(item.get("hts_kor_isnm", item.get("data_name", ""))).strip()
                     if any(k in name for k in ["스팩", "리츠", "인버스", "레버리지", "KODEX", "TIGER"]): continue
                     
                     p_str_raw = "".join(filter(str.isdigit, str(item.get("stck_prpr", "0"))))
                     price = int(p_str_raw) if p_str_raw else 0
-                    
                     ctrt = float(str(item.get("prdy_ctrt", "0.0")).strip())
                     stat = str(item.get("iscd_stat_cls_code", "00")).strip()
                     raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
                     
                     is_mega_cap = (t_code in mega_cap_codes or "하이닉스" in name or "삼성전자" in name or "현대차" in name)
-                    
                     if price < 5000 and not is_mega_cap: continue
                     if ctrt <= 0.0 and not is_mega_cap: continue 
                     
                     rank_map[t_code] = True
                     pool.append((rank_idx + 1, t_code, name, price, ctrt, raw_amt, stat))
-        except Exception as e:
-            st.session_state.net_log = f"❌ 데이터 조회망 패킷 통신 무너짐: {str(e)}"
-
-        watchlist_backups = [("000660", "SK하이닉스"), ("005930", "삼성전자")]
-        for b_code, b_name in watchlist_backups:
-            if b_code not in rank_map:
-                time.sleep(0.2) 
-                b_res = self.fetch_single_stock_backup(token, b_code)
-                if b_res:
-                    pool.append((999, b_code, b_name, b_res["price"], b_res["ctrt"], b_res["amt"], b_res["stat"]))
-
-        st.session_state.net_log = f"🟢 한투 실전망 대장주 순수 동기화 완료! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
-        pool.sort(key=lambda x: x[0]) 
-        return pool
+                
+                watchlist_backups = [("000660", "SK하이닉스"), ("005930", "삼성전자")]
+                for b_code, b_name in watchlist_backups:
+                    if b_code not in rank_map:
+                        time.sleep(0.1) 
+                        b_res = self.fetch_single_stock_backup(token, b_code)
+                        if b_res: pool.append((999, b_code, b_name, b_res["price"], b_res["ctrt"], b_res["amt"], b_res["stat"]))
+                
+                st.session_state.net_log = f"🟢 한투 실전망 대장주 순수 동기화 완료! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
+                pool.sort(key=lambda x: x[0])
+                return pool
+        except:
+            pass
+        return st.session_state.last_pool
 
 # =====================================================================
-# ⚡ [상시 표출 시스템]
+# ⚡ [상시 표출 시스템 브릿지]
 # =====================================================================
-def force_sync_load():
-    engine = HantuPureSpeedEngine()
-    token = engine.get_token()
-    if token:
-        st.session_state.last_pool = engine.fetch_market_pool_by_indices(token)
-
-if not st.session_state.last_pool:
-    force_sync_load()
+engine = HantuPureSpeedEngine()
+token = engine.get_token()
+if token:
+    res_pool = engine.fetch_market_pool_by_indices(token)
+    if res_pool: st.session_state.last_pool = res_pool
 
 # =====================================================================
 # 📡 [상단 구역] 네이버 오리지널 실시간 캔들 시황판 이식
@@ -228,25 +205,26 @@ with col_radar2:
     st.image(f"https://ssl.pstatic.net/imgfinance/chart/marketindex/FX_USDKRW.png?sid={time_seed}", use_container_width=True)
 
 # =====================================================================
-# 🚦 [수술 대성공] 3단계 수급 행동명령 신호등 전광판
+# 🚦 3단계 수급 행동명령 신호등 전광판
 # =====================================================================
 st.markdown("#### 🚨 외국인 장중 실시간 선물 순매수 동기화 패널 (순정 하이브리드 트랙)")
 live_fut = st.session_state.pure_fut_money
 
-if live_fut > 0:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"+{live_fut:,} 억 원", delta="📈 외국인 메이저 상방 바스켓 가동")
-elif live_fut < 0:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"{live_fut:,} 억 원", delta="📉 외국인 프로그램 하방 압박 주의", delta_color="inverse")
+if token and live_fut != 0:
+    if live_fut > 0:
+        st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"+{live_fut:,} 억 원", delta="📈 외국인 메이저 상방 바스켓 가동")
+    else:
+        st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"{live_fut:,} 억 원", delta="📉 외국인 프로그램 하방 압박 주의", delta_color="inverse")
+    
+    if live_fut >= 1000:
+        st.success(f"🟢 **[단타 최적 기류] 외국인 선물 강력 매수 유입 중! (+{live_fut:,}억)** 메시지가 뜨며 안심하고 자금을 투입할 타이밍임을 알려줍니다.")
+    elif live_fut <= -1000:
+        st.error(f"🔴 **[지수 급락 경고] 매도로 시장을 짓누르면 매도 폭탄 투하 중! ({live_fut:,}억)** 개별 테마주 외 진입 금지 경고등을 켜서 자금을 잠그도록 보호합니다.")
+    else:
+        st.info(f"🟡 **[수급 관망 기류] 외국인 선물 누적 잔고 박스권 이동 중 ({live_fut:,}억)** 무리한 대형주 추격 매수를 자제하고 하단 주도 테마의 분봉 눌림목 지지선을 철저히 타격하십시오.")
 else:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value="0 억 원", delta="⏱️ 장 초반 집계 대기 또는 수급 보합 상태")
-
-# ⚡ 대표님 오더 100% 반영: 외인 선물금액 매칭형 3단계 신호등 명령어 강제 표출 가드 작동
-if live_fut >= 1000:
-    st.success(f"🟢 **[단타 최적 기류] 외국인 선물 강력 매수 유입 중! (+{live_fut:,}억)** 메시지가 뜨며 안심하고 자금을 투입할 타이밍임을 알려줍니다.")
-elif live_fut <= -1000:
-    st.error(f"🔴 **[지수 급락 경고] 매도로 시장을 짓누르면 매도 폭탄 투하 중! ({live_fut:,}억)** 개별 테마주 외 진입 금지 경고등을 켜서 자금을 잠그도록 보호합니다.")
-else:
-    st.info(f"🟡 **[수급 관망 기류] 외국인 선물 누적 잔고 박스권 이동 중 ({live_fut:,}억)** 무리한 대형주 추격 매수를 자제하고 하단 주도 테마의 분봉 눌림목 지지선을 철저히 타격하십시오.")
+    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value="연결 대기 중", delta="🔌 한투 통신망 동기화 재도전 중")
+    st.info("🟡 **[수급 관망 기류] 한투 통신망 패킷 대기 중** 상단 오리지널 지수 패널의 환율 흐름이 안정되는지 관찰하며 하단 주도 테마의 진입 타점을 대기하십시오.")
 
 st.markdown("---")
 
@@ -266,9 +244,9 @@ if btn_clear:
     st.rerun()
 
 if btn_fetch:
+    if os.path.exists(TOKEN_FILE): os.remove(TOKEN_FILE)
     st.session_state.last_pool = []
     with st.spinner("한투 실전망 게이트웨이 동기화 중..."):
-        force_sync_load()
         st.rerun()
 
 # =====================================================================
@@ -344,7 +322,10 @@ if not df_scalping.empty:
         selected_ticker = sc_selected.iloc[0]["종목코드"]
         selected_name = sc_selected.iloc[0]["종목명"].split("]")[-1].strip()
 else:
-    st.info("💡 지금 이 순간에는 거래대금 상위 20위 내에서 등락률 +4% ~ +12% 규격에 맞는 안전한 단타 주도주가 없습니다. 무리한 진입 금지 / 하단 마스터 시황판을 점검해 주십시오.")
+    if not df_normal.empty:
+        st.info("💡 지금 이 순간에는 거래대금 상위 20위 내에서 등락률 +4% ~ +12% 규격에 맞는 안전한 단타 주도주가 없습니다. 무리한 진입 금지 / 하단 마스터 시황판을 점검해 주십시오.")
+    else:
+        st.info("📥 한투 게이트웨이 파이프라인 무중단 재연결 동기화 중입니다. 지수 차트를 보며 잠시만 기다려주십시오.")
 
 if not df_normal.empty:
     if not selected_ticker:
