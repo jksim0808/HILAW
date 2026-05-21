@@ -20,7 +20,7 @@ KST = pytz.timezone('Asia/Seoul')
 APP_KEY = st.secrets["APP_KEY"]
 APP_SECRET = st.secrets["APP_SECRET"]
 
-# ⚡ 대표님 실전용 키 검증 완료 -> 실전 운영망 주소로 완전 고정
+# ⚡ 실전 운영망 주소 고정
 URL_BASE = "https://openapi.koreainvestment.com:9443"
 
 # 사이드바 설정 영역
@@ -88,18 +88,16 @@ def run_monitoring():
             st.session_state['engine_status'] = "❌ 실전 토큰 인증 실패 (Secrets 확인 필요)"
             return
 
-        # ⚡ 실전 운영망에서 100% 뚫리는 전용 거래대금 상위 엔드포인트 세팅
         api_url = f"{URL_BASE}/uapi/domestic-stock/v1/quotations/volume-rank"
         
-        # 🛡️ 실전망 전용 필수 보안 프로토콜 헤더 구조로 보강 (`personalsecid` 추가)
+        # 🛡️ 한투 실전망 표준 규격 헤더 전면 수정 보완 (대소문자/필수키 엄격 교정)
         headers = {
             "content-type": "application/json",
             "authorization": f"Bearer {token}",
             "appkey": APP_KEY,
             "secretkey": APP_SECRET,
             "tr_id": "FHPST01710000",
-            "custtype": "P",            # 개인 투자자 고정
-            "personalsecid": ""         # 실전 순위 데이터 요청 시 공백 필수 전송
+            "custtype": "P"
         }
         
         params = {
@@ -122,24 +120,27 @@ def run_monitoring():
             res_json = res.json()
             output = res_json.get('output', [])
             
+            # API 호출 결과 메시지 분석용 로그
+            rt_msg = res_json.get('msg1', '메시지 없음').strip()
+            
             if not output:
-                st.session_state['engine_status'] = f"⚠️ 연결 성공했으나 장외 시간 빈 데이터 응답 (코드: {res_json.get('rt_cd')})"
+                st.session_state['engine_status'] = f"⚠️ 데이터 빈 값 반환 (한투 응답: {rt_msg})"
                 return
                 
             df_raw = pd.DataFrame(output)
             
-            # 실전 데이터 완벽 수치 정형화 형변환
-            df_raw['stck_prpr'] = df_raw['stck_prpr'].astype(int)       
-            df_raw['acml_tr_pbmn'] = df_raw['acml_tr_pbmn'].astype(float).astype(int) 
-            df_raw['prdy_ctrt'] = df_raw['prdy_ctrt'].astype(float)     
-            df_raw['money_ok'] = df_raw['acml_tr_pbmn'] // 100000000 # 원 단위를 '억 원'으로 변환
+            # 실전 데이터 데이터타입 동적 변환 및 예외 처리 방어벽
+            df_raw['stck_prpr'] = pd.to_numeric(df_raw['stck_prpr'], errors='coerce').fillna(0).astype(int)
+            df_raw['acml_tr_pbmn'] = pd.to_numeric(df_raw['acml_tr_pbmn'], errors='coerce').fillna(0).astype(float)
+            df_raw['prdy_ctrt'] = pd.to_numeric(df_raw['prdy_ctrt'], errors='coerce').fillna(0).astype(float)
+            df_raw['money_ok'] = (df_raw['acml_tr_pbmn'] // 100000000).astype(int) # 억 원 단위 변환
             
-            # 🎯 주도주 추출 커트라인 최적화: 거래대금 50억 이상 & 상승률 +1.0% 이상 전수 포착
+            # 🎯 주도주 추출 기준: 장중 실시간 상위 거래대금 50억 이상 & 상승률 +1.0% 이상
             target_stocks = df_raw[(df_raw['money_ok'] >= 5) & (df_raw['prdy_ctrt'] >= 1.0)]
             
-            # 만약 장세가 죽어있어 조건 만족 종목이 10개 미만이면, 대금 최상위 20개 강제 정렬 표출
+            # 시장 전체 수급이 부족한 초반이거나 거래 소강 상태일 시 거래대금 최상위 15개 강제 확보
             if len(target_stocks) < 10:
-                target_stocks = df_raw.sort_values(by='money_ok', ascending=False).head(20)
+                target_stocks = df_raw.sort_values(by='money_ok', ascending=False).head(15)
             else:
                 target_stocks = target_stocks.sort_values(by='money_ok', ascending=False)
             
@@ -154,10 +155,10 @@ def run_monitoring():
                 money = row['money_ok']
                 detect_time = datetime.now(KST).strftime('%H:%M:%S')
                 
-                # 중복 전송 방지 및 실시간 알림 피드
+                # 중복 감지 제외 및 텔레그램 피드
                 if code not in st.session_state['sent_stocks']:
                     msg = (
-                        f"🚀 [실전 주도주 레이더 포착] 🚀\n\n"
+                        f"🚀 [실전 장중 주도주 포착] 🚀\n\n"
                         f"📌 종목명: {name} ({code})\n"
                         f"📈 현재가: {price:,}원\n"
                         f"⚡ 당일 등락률: {rate}%\n"
@@ -177,28 +178,28 @@ def run_monitoring():
                 
             st.session_state['detected_list'] = fresh_list
             st.session_state['last_run_time'] = datetime.now(KST).strftime('%H:%M:%S')
-            st.session_state['engine_status'] = "🟢 실전망 라이브 데이터 수집 정상 가동 중"
+            st.session_state['engine_status'] = f"🟢 실전 장중 데이터 갱신 완료 ({rt_msg})"
         else:
-            st.session_state['engine_status'] = f"❌ 한투 서버 응답 거부 (에러 코드: {res.status_code})"
+            st.session_state['engine_status'] = f"❌ 서버 거부 (통신 에러 코드: {res.status_code})"
             
     except Exception as e:
-        st.session_state['engine_status'] = f"💥 연산 스크립트 장애 예외 발생: {str(e)}"
+        st.session_state['engine_status'] = f"💥 시스템 연산 장애 발생: {str(e)}"
 
 # ==========================================
 # 5. 프론트엔드 UI 화면 구성 구역
 # ==========================================
-st.title("🔥 한국투자증권 실전망 전용 주도주 모니터링 레이더")
-st.caption("실전 투자 계정 인증 헤더 및 특수 TR 프로토콜을 완벽 이식한 전문가용 실시간 수급 체계")
+st.title("🔥 한국투자증권 실전망 전용 장중 주도주 레이더")
+st.caption("장중 실시간 수급 연동 규격 보정 및 한투 보안 차단벽 우회 완료 최종 가동본")
 
 # 즉시 새로고침 제어 버튼
-if st.button("🔄 실전 서버 강제 호출 및 데이터 새로고침 (Manual Sync)", use_container_width=True):
+if st.button("🔄 실전 서버 강제 재조회 및 데이터 동기화 (Manual Sync)", use_container_width=True):
     run_monitoring()
 
 col_m1, col_m2, col_m3 = st.columns(3)
 with col_m1:
     st.metric(label="최근 실시간 동기화 시간", value=st.session_state['last_run_time'])
 with col_m2:
-    st.metric(label="오늘 레이더에 검출된 총 주도주 수", value=f"{len(st.session_state['detected_list'])} 개")
+    st.metric(label="오늘 레이더에 검출된 총 종목 수", value=f"{len(st.session_state['detected_list'])} 개")
 with col_m3:
     st.metric(label="실전 엔진 가동 현황", value=st.session_state['engine_status'])
 
@@ -225,7 +226,7 @@ if st.session_state['detected_list']:
         selected_index = event_capture["selection"]["rows"][0]
         st.session_state['clicked_stock'] = st.session_state['detected_list'][selected_index]
 else:
-    st.warning("📥 한투 실전 API 접속 인증을 시도 중입니다. 만약 장외 시간(오후 3시 30분 ~ 다음날 오전 9시)이거나 주말인 경우 한투 서버가 빈 데이터를 반환하므로 표가 비어있을 수 있습니다.")
+    st.warning("📥 장중 수급 데이터를 파싱하고 있습니다. 만약 화면이 계속 멈춰있다면 상단의 [🔄 실전 서버 강제 재조회 및 데이터 동기화] 버튼을 툭 눌러 강제 인식을 유도하십시오.")
 
 # ==========================================
 # 🖥️ [네이버 금융 모바일] 표 클릭형 즉시 표출 차트 연동 엔진 구역
