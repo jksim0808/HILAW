@@ -2,7 +2,6 @@ import requests
 import json
 import pandas as pd
 import time
-import re
 from datetime import datetime
 import pytz
 import streamlit as st
@@ -32,6 +31,15 @@ user_chat_id = st.sidebar.text_input("내 채팅방 ID 입력", help="@userinfob
 
 TELEGRAM_TOKEN = user_token if user_token else st.secrets["TELEGRAM_TOKEN"]
 CHAT_ID = user_chat_id if user_chat_id else st.secrets["CHAT_ID"]
+
+# 🚨 장외 시간 테스트 모드 스위치 추가 (대표님의 완벽한 주말/야간 테스트 지원)
+st.sidebar.markdown("---")
+st.sidebar.header("🛠️ 시스템 테스트 환경")
+market_time_override = st.sidebar.checkbox(
+    "🚨 장외 시간 테스트 모드", 
+    value=False, 
+    help="장 운영 시간 외에도 텔레그램 알림과 실시간 표 연동이 완벽하게 가동되는지 임의로 가상 주도주를 생성해 발송합니다."
+)
 
 # 📱 사용자 전용 접이식 텔레그램 가이드북
 st.sidebar.markdown("---")
@@ -63,18 +71,25 @@ if 'detected_list' not in st.session_state:
     st.session_state['detected_list'] = []  
 if 'clicked_stock' not in st.session_state:
     st.session_state.clicked_stock = None
+if 'api_access_token' not in st.session_state:
+    st.session_state.api_access_token = None
 
 # ==========================================
-# 4. 핵심 백엔드 기능 함수들 (100억 기준 및 동기식 텔레그램 보정)
+# 4. 핵심 백엔드 기능 함수들 (API 캐싱 & 100억 기준 연산)
 # ==========================================
 def get_access_token():
-    """OAuth2.0 접근 토큰(Access Token) 발급"""
+    """OAuth2.0 접근 토큰(Access Token) 발급 - 세션 캐싱 적용으로 분당 발급 제한 우회"""
+    if st.session_state.api_access_token:
+        return st.session_state.api_access_token
+
     headers = {"content-type": "application/json"}
     body = {"grant_type": "client_credentials", "appkey": APP_KEY, "secretkey": APP_SECRET}
     try:
         res = requests.post(f"{URL_BASE}/oauth2/tokenP", headers=headers, data=json.dumps(body), timeout=5)
         if res.status_code == 200:
-            return res.json().get("access_token")
+            token = res.json().get("access_token")
+            st.session_state.api_access_token = token
+            return token
     except Exception as e:
         st.error(f"한투 서버 토큰 발행 실패: {e}")
     return None
@@ -99,6 +114,47 @@ def check_market_time():
     end_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
     return start_time <= now <= end_time
 
+def inject_mock_leading_stock():
+    """장외 시간 테스트를 위한 가상 주도주 데이터 임의 주입 모듈"""
+    import random
+    mock_names = ["현대로템", "한화에어로스페이스", "알테오젠", "SK하이닉스", "삼성전자", "기아", "현대차", "HD현대일렉트릭"]
+    mock_codes = ["064350", "012450", "196170", "000660", "005930", "000270", "005380", "043200"]
+    
+    idx = random.randint(0, len(mock_names)-1)
+    name = mock_names[idx]
+    code = mock_codes[idx]
+    
+    # 이미 오늘 감지된 적이 있으면 주입 방지
+    if code in st.session_state['sent_stocks']:
+        return
+        
+    vol = round(random.uniform(3.5, 12.0), 2)
+    price = random.randint(15, 250) * 1000
+    money = random.randint(105, 380)
+    detect_time = datetime.now(KST).strftime('%H:%M:%S')
+    
+    msg = (
+        f"🚨 [가상 주도주 테스트 포착 - 변동폭 3% / 거래대금 100억 돌파] 🚨\n\n"
+        f"📌 종목명: {name} ({code})\n"
+        f"📈 현재가: {price:,}원\n"
+        f"⚡ 당일 고저 변동폭: {vol}%\n"
+        f"💰 현재 거래대금: {money:,}억"
+    )
+    
+    # 텔레그램 전송
+    send_telegram_msg_sync(TELEGRAM_TOKEN, CHAT_ID, msg)
+    st.session_state['sent_stocks'].add(code)
+    
+    new_item = {
+        "포착 시간": detect_time,
+        "종목코드": code,
+        "종목명": name,
+        "현재가(원)": f"{price:,}",
+        "하루 변동폭": f"{vol}%",
+        "거래대금(억)": money
+    }
+    st.session_state['detected_list'].insert(0, new_item)
+
 def run_monitoring():
     """실시간 주도주 스크리닝 연산 파이프라인 (100억 원 기준 적용)"""
     today = datetime.now(KST).strftime("%Y%m%d")
@@ -109,13 +165,21 @@ def run_monitoring():
         st.session_state['sent_stocks'].clear()
         st.session_state['detected_list'] = []
 
-    if not check_market_time():
+    # 장외 시간 및 오버라이드 유무 판별
+    is_market_open = check_market_time()
+    
+    if not is_market_open and not market_time_override:
+        return
+
+    # 만약 테스트 모드이고 장외 시간이라면 실시간 가상데이터 주입
+    if market_time_override and not is_market_open:
+        inject_mock_leading_stock()
         return
 
     try:
         token = get_access_token()
         if not token:
-            st.warning("⚠️ 한투 API 토큰을 발급받지 못했습니다. Secrets 설정을 점검하십시오.")
+            st.sidebar.error("⚠️ 한투 API 토큰을 발급받지 못했습니다. Secrets 설정을 점검하십시오.")
             return
 
         headers = {
@@ -125,40 +189,70 @@ def run_monitoring():
             "secretkey": APP_SECRET,
             "tr_id": "FHPST01710000" 
         }
-        params = {"user_id": "", "seq": "", "data_cnt": "", "ranking_option": "1", "market_div": "0000", "industry_div": "0000"}
         
-        # 한국투자증권 장중 거래대금 랭킹 데이터 수집
-        res = requests.get(f"{URL_BASE}/uapi/domestic-stock/v1/ranking/trade-vol", headers=headers, params=params, timeout=10)
-        data = res.json().get('output', [])
+        # [정교화 보완] 한국투자증권 거래량 순위(거래대금 포함) TR_ID 공식 규격 파라미터 매칭
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_COND_SCR_DIV_CODE": "20171",
+            "FID_INPUT_ISCD": "0000",
+            "FID_DIV_CLS_CODE": "0",
+            "FID_BLNG_CLS_CODE": "0",
+            "FID_TRGT_CLS_CODE": "111111111",
+            "FID_TRGT_EXLS_CLS_CODE": "0000000000",
+            "FID_INPUT_PRICE_1": "",
+            "FID_INPUT_PRICE_2": "",
+            "FID_VOL_CNT": "",
+            "FID_INPUT_DATE_1": ""
+        }
+        
+        # 한국투자증권 장중 거래대금 랭킹 데이터 수집 (공식 엔드포인트 수정 완료)
+        res = requests.get(f"{URL_BASE}/uapi/domestic-stock/v1/quotations/volume-rank", headers=headers, params=params, timeout=10)
+        
+        if res.status_code != 200:
+            return
+            
+        res_json = res.json()
+        if res_json.get("rt_cd") != "0":
+            st.sidebar.error(f"⚠️ KIS API 오류: {res_json.get('msg1')}")
+            return
+            
+        data = res_json.get('output', [])
         
         if not data:
             return
 
         df = pd.DataFrame(data)
-        df['stck_prpr'] = df['stck_prpr'].astype(int)
-        df['stck_hgpr'] = df['stck_hgpr'].astype(int)
-        df['stck_lwpr'] = df['stck_lwpr'].astype(int)
-        df['acml_tr_pbmn'] = df['acml_tr_pbmn'].astype(int) // 100000000 # 억 단위로 스케일링
+        
+        # 문자열로 반환되는 KIS 수치들을 정밀 숫자형으로 캐스팅
+        df['stck_prpr'] = pd.to_numeric(df['stck_prpr'], errors='coerce').fillna(0).astype(int)
+        df['stck_hgpr'] = pd.to_numeric(df['stck_hgpr'], errors='coerce').fillna(0).astype(int)
+        df['stck_lwpr'] = pd.to_numeric(df['stck_lwpr'], errors='coerce').fillna(0).astype(int)
+        
+        # acml_tr_pbmn (누적거래대금): "원" 단위를 1억 원 단위로 정량 스케일링 보정
+        df['acml_tr_pbmn'] = pd.to_numeric(df['acml_tr_pbmn'], errors='coerce').fillna(0).astype(float) / 100000000
         
         # 당일 고저 변동폭 산출
         df['volatility'] = ((df['stck_hgpr'] - df['stck_lwpr']) / df['stck_prpr'] * 100).round(2)
         
-        # 💡 [보완] 스크리닝 필터 기준: 거래대금 100억 원 이상 & 고저 변동폭 3% 이상
+        # 💡 스크리닝 필터 기준: 거래대금 100억 원 이상 & 고저 변동폭 3% 이상
         target_stocks = df[(df['acml_tr_pbmn'] >= 100) & (df['volatility'] >= 3.0)]
         
+        # 거래대금 최상위 기조로 정렬
+        target_stocks = target_stocks.sort_values(by='acml_tr_pbmn', ascending=False)
+        
         for _, row in target_stocks.iterrows():
-            raw_code = row['mkte_ticker']
+            raw_code = row.get('mksc_shrn_iscd', row.get('stck_shrn_iscd', row.get('mkte_ticker', '')))
             code = ''.join(filter(str.isdigit, raw_code))[:6] # 6자리 순수 코드로 정제
-            name = row['hts_kor_isnm']
+            name = row.get('hts_kor_isnm', '미확인종목')
             vol = row['volatility']
             price = row['stck_prpr']
-            money = row['acml_tr_pbmn']
+            money = int(row['acml_tr_pbmn'])
             detect_time = datetime.now(KST).strftime('%H:%M:%S')
             
-            if code in st.session_state['sent_stocks']:
+            if not code or code in st.session_state['sent_stocks']:
                 continue
                 
-            # 💡 텔레그램 메시지도 100억 원 기준으로 텍스트 자동 교정 적용
+            # 💡 텔레그램 메시지 발송
             msg = (
                 f"🚀 [주도주 포착 - 변동폭 3% / 거래대금 100억 돌파] 🚀\n\n"
                 f"📌 종목명: {name} ({code})\n"
@@ -198,7 +292,7 @@ with col2:
 
 st.markdown("---")
 st.subheader("🎯 장중 실시간 주도주 포착 리스트 (1분 주기)")
-st.caption("💡 아래 리스트에서 관심 있는 **종목의 행(Row)을 툭 클릭**하시면 화면 이동 없이 즉시 하단에 호가창과 차트 전광판이 연동됩니다.")
+st.caption("💡 아래 리스트에서 관심 있는 **종목의 행(Row)을 툭 클릭**하시면 화면 이동 없이 즉시 하단에 네이버 호가/차트 전광판이 실시간으로 연동됩니다.")
 
 table_placeholder = st.empty()
 info_placeholder = st.empty()
@@ -218,12 +312,14 @@ if st.session_state['countdown'] <= 0:
 if st.session_state['detected_list']:
     display_df = pd.DataFrame(st.session_state['detected_list'])
     
+    # 💡 고정된 위젯 키(Key)를 입력하여, 새로고침 루프 중에도 마우스 선택 상태가 풀려 증발하지 않도록 보정
     event = table_placeholder.dataframe(
         display_df, 
         use_container_width=True, 
         hide_index=True, 
         on_select="rerun", 
-        selection_mode="single-row"
+        selection_mode="single-row",
+        key="detected_stocks_table_viewer"
     )
     
     if event and event.get("selection") and event["selection"].get("rows"):
