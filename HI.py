@@ -58,7 +58,7 @@ class HantuPureSpeedEngine:
             except:
                 pass
 
-        url = "https://openapi.koreainwestment.com/oauth2/tokenP"
+        # 🛠️ [긴급 수술 완료] 주소창 오타 수정 -> koreainvestment 정품망 정상 도킹
         url = "https://openapi.koreainvestment.com/oauth2/tokenP"
         body = {
             "grant_type": "client_credentials", 
@@ -182,8 +182,8 @@ class HantuPureSpeedEngine:
                     raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
                     
                     is_mega_cap = (t_code in mega_cap_codes or "하이닉스" in name or "삼성전자" in name or "현대차" in name)
-                    if price < 3000 and not is_mega_cap: continue # ⚡ 대표님 오더 동전주 필터 완화
-                    if ctrt <= -5.0 and not is_mega_cap: continue # 하락주 과도 필터 완화
+                    if price < 3000 and not is_mega_cap: continue 
+                    if ctrt <= -5.0 and not is_mega_cap: continue 
                     
                     rank_map[t_code] = True
                     pool.append((rank_idx + 1, t_code, name, price, ctrt, raw_amt, stat))
@@ -308,7 +308,7 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             is_mega_cap = (t in mega_cap_codes or "하이닉스" in n or "삼성전자" in n or "현대차" in n)
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
-            # 🛠️ [대표님 긴급 긴급 패치]: +12% 이상 날아간 녀석도, 50위권 내 쌩쌩한 양봉이면 무조건 포획 연사
+            # 🛠️ 상위 50위권 내 쌩쌩한 양봉(+3% 이상)이면 제한 없이 대장주 전원 무조건 포획 연사
             if raw_rank <= 50 and (ctrt >= 3.0) and not is_mega_cap:
                 scalping_targets.append({
                     "포착순위": f"🔥 {len(scalping_targets) + 1}순위", "종목코드": t,
