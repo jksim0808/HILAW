@@ -11,8 +11,22 @@ from datetime import datetime, timezone, timedelta
 # =====================================================================
 st.set_page_config(page_title="주성 × 파두 락인 마스터 스캐너 Pro", layout="wide")
 
-APP_KEY = st.secrets.get("HANTU_APP_KEY", "").strip()
-APP_SECRET = st.secrets.get("HANTU_APP_SECRET", "").strip()
+# 🛡️ 자격 증명 안전 로드 및 유령 공백 원천 박멸 (.strip())
+sec_app_key = st.secrets.get("HANTU_APP_KEY", "").strip()
+sec_app_secret = st.secrets.get("HANTU_APP_SECRET", "").strip()
+
+# 사이드바 입력창 배치 (Secrets 없을 때 백업 및 실시간 수정용)
+st.sidebar.header("🔑 한투 실전망 자격 증명")
+user_app_key = st.sidebar.text_input("한투 APP KEY", value=sec_app_key, type="password")
+user_app_secret = st.sidebar.text_input("한투 APP SECRET", value=sec_app_secret, type="password")
+
+APP_KEY = user_app_key.strip() if user_app_key else sec_app_key
+APP_SECRET = user_app_secret.strip() if user_app_secret else sec_app_secret
+
+st.sidebar.markdown("---")
+st.sidebar.header("🤖 텔레그램 알림 수신기")
+TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "").strip()
+CHAT_ID = st.secrets.get("CHAT_ID", "").strip()
 
 if "engine_cache" not in st.session_state: st.session_state.engine_cache = {}
 if "last_pool" not in st.session_state: st.session_state.last_pool = []
@@ -52,9 +66,15 @@ class HantuLockInEngine:
             except:
                 pass
 
-        url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
+        # ⚡ [정석 보정 1단계]: 토큰 발급 창구는 포트번호 없이 공통 주소 호출 (AppSec 차단 해결)
+        url = "https://openapi.koreainvestment.com/oauth2/tokenP"
+        body = {
+            "grant_type": "client_credentials", 
+            "appkey": APP_KEY, 
+            "appsecret": APP_SECRET
+        }
         try:
-            r = self.session.post(url, json={"grant_type": "client_credentials", "appkey": APP_KEY, "appsecret": APP_SECRET}, timeout=4.0)
+            r = self.session.post(url, json=body, timeout=5.0)
             if r.status_code == 200:
                 data = r.json()
                 token = data.get("access_token")
@@ -64,20 +84,27 @@ class HantuLockInEngine:
                         json.dump({"token": token, "expires_at": expires_at}, f)
                     return token
             else:
-                st.session_state.net_log = f"❌ 토큰 발급 실패 ({r.status_code})"
+                err_json = r.json()
+                reason_msg = err_json.get('error_description', f"HTTP 오류: {r.status_code}")
+                st.session_state.net_log = f"❌ 토큰 발급 실패 ({reason_msg})"
         except Exception as e:
             st.session_state.net_log = f"❌ 인증 연결 실패 -> {str(e)}"
         return None
 
     def fetch_single_stock_search(self, token, query_code):
+        # ⚡ 시세 조회는 9443 보안 포트로 정밀 타격
         url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
         headers = {
-            "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
-            "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01010000", "custtype": "P"
+            "content-type": "application/json; charset=utf-8", 
+            "authorization": f"Bearer {token}",
+            "appkey": APP_KEY, 
+            "appsecret": APP_SECRET, 
+            "tr_id": "FHPST01010000", 
+            "custtype": "P"
         }
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": query_code}
         try:
-            r = self.session.get(url, headers=headers, params=params, timeout=2.0)
+            r = self.session.get(url, headers=headers, params=params, timeout=3.0)
             if r.status_code == 200:
                 res_json = r.json()
                 out = res_json.get("output") if res_json.get("output") else res_json.get("output1")
@@ -102,16 +129,32 @@ class HantuLockInEngine:
         # 1단계: 당일 실시간 거래대금 상위 100위 싹 쓸어오기
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
-            "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
-            "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01710000", "custtype": "P"
+            "content-type": "application/json; charset=utf-8", 
+            "authorization": f"Bearer {token}",
+            "appkey": APP_KEY, 
+            "appsecret": APP_SECRET, 
+            "tr_id": "FHPST01710000", 
+            "custtype": "P"
         }
+        
+        # ⚡ [정석 보정 2단계]: 한투 실전망 필수 전송 공백 파라미터 빈틈없이 매칭 (방화벽 통과 핵심)
         params_vol = {
-            "FID_COND_MRKT_DIV_CODE": "J", "FID_COND_SCR_DIV_CODE": "20171",
-            "FID_INPUT_ISCD": "0000", "FID_DIV_CLS_CODE": "0", "FID_SORT_CLS_CODE": "4" # 거래대금 정렬 고정
+            "FID_COND_MRKT_DIV_CODE": "J", 
+            "FID_COND_SCR_DIV_CODE": "20171",
+            "FID_INPUT_ISCD": "0000", 
+            "FID_DIV_CLS_CODE": "0", 
+            "FID_SORT_CLS_CODE": "4",       # 거래대금 내림차순 정렬
+            "FID_BLNG_CLS_CODE": "0",
+            "FID_TRGT_CLS_CODE": "00000000",
+            "FID_TRGT_EXCL_CLS_CODE": "00000000",
+            "FID_INPUT_PRICE_1": "0",
+            "FID_INPUT_PRICE_2": "0",
+            "FID_VOL_CNT": "",              # ⚠️ 한투 표준 규격 공백문자 필수 항목
+            "FID_INPUT_DATE_1": ""          # ⚠️ 한투 표준 규격 공백문자 필수 항목
         }
         
         try:
-            r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=4.0)
+            r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=5.0)
             if r_vol.status_code == 200:
                 vol_output = r_vol.json().get("output", [])
                 for rank_idx, item in enumerate(vol_output):
@@ -128,15 +171,16 @@ class HantuLockInEngine:
                     stat = str(item.get("iscd_stat_cls_code", "00")).strip()
                     raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
                     
-                    # 🛠️ [필터 조정 1단계]: 파두 포착을 위해 최소 가격 제한 하한선을 5,000원으로 조정!
+                    # 파두 포착을 위해 최소 가격 제한 하한선을 5,000원으로 유지
                     if price < 5000: continue
-                    if ctrt <= 0.0: continue # 마이너스 전면 파쇄
+                    if ctrt <= 0.0: continue # 마이너스 전면 상쇄
                     
                     rank_map[t_code] = True
                     pool.append((rank_idx + 1, t_code, name, ctrt, raw_amt, stat))
-        except: pass
+        except Exception as e:
+            st.session_state.net_log = f"❌ 데이터 조회망 패킷 통신 무너짐: {str(e)}"
 
-        # 2단계: 🛠️ [필터 조정 2단계]: 주성과 파두가 순위권 밖에 숨어있을 때를 대비한 강제 락인 가동
+        # 2단계: 주성과 파두가 순위권 밖에 숨어있을 때를 대비한 강제 락인 가동
         target_watchlist = [("036930", "주성엔지니어링"), ("044010", "파두")]
         
         for ticker, name in target_watchlist:
@@ -146,7 +190,7 @@ class HantuLockInEngine:
                 if s_res and s_res["ctrt"] > 0.0: # 플러스 상승 중일 때만 화면 송출
                     pool.append((999, ticker, name, s_res["ctrt"], s_res["amt"], s_res["stat"]))
 
-        st.session_state.net_log = f"🟢 주성 × 파두 교차 추적 엔진 가동 성공! ({current_time_str})"
+        st.session_state.net_log = f"🟢 한투 실전망 주성 × 파두 교차 관제 성공! ({current_time_str})"
         pool.sort(key=lambda x: x[0])
         return pool
 
@@ -155,19 +199,19 @@ class HantuLockInEngine:
 # =====================================================================
 cc1, cc2 = st.columns([4, 1])
 with cc1:
-    btn_fetch = st.button("🔄 실시간 당일 플러스(+) 상승 주도주 전체 다이렉트 소싱 가동", type="primary", use_container_width=True)
+    btn_fetch = st.button("🔄 한투 실전망 당일 플러스(+) 상승 주도주 전체 다이렉트 소싱 가동", type="primary", use_container_width=True)
 with cc2:
     btn_clear = st.button("⚠️ 시스템 세션 초기화", type="secondary", use_container_width=True)
 
 if btn_clear:
     if os.path.exists(TOKEN_FILE): os.remove(TOKEN_FILE)
     st.session_state.last_pool = []
-    st.session_state.net_log = "♻️ 캐시 메모리 청소 완료."
+    st.session_state.net_log = "♻️ 한투 실전망 인증 세션 초기화 완료."
     st.rerun()
 
 if btn_fetch:
     st.session_state.last_pool = []
-    with st.spinner("파두 수집 필터 하한선 5천 원 하향 완료! 실시간 수급 대장주 전체 바인딩 중..."):
+    with st.spinner("한투 실전망 게이트웨이 개방 중... 실시간 수급 데이터 바인딩 중입니다."):
         engine = HantuLockInEngine()
         token = engine.get_token()
         if token:
@@ -251,7 +295,7 @@ if not df_final.empty:
         raw_selected_name = df_final.iloc[0]["종목명"]
         selected_name = raw_selected_name.split("]")[-1].strip()
 else:
-    st.info("💡 동기화 대기 중입니다. 위의 버튼을 누르시면 주성·파두를 포함하여 오늘 돈이 몰리며 상승 중인 우량 주도주 수십 개가 전원 노출됩니다.")
+    st.info("💡 동기화 대기 중입니다. 위의 버튼을 누르시면 한투 실전망 파이프라인을 열어 주성·파두 및 당일 거래대금 상위 양봉 주도주를 전원 바인딩합니다.")
 
 st.write("---")
 
