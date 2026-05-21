@@ -9,9 +9,9 @@ from datetime import datetime, timezone, timedelta
 # =====================================================================
 # ⚙️ [최우선] Streamlit 설정 및 세션 초기화
 # =====================================================================
-st.set_page_config(page_title="주성 × 파두 락인 마스터 스캐너 Pro", layout="wide")
+st.set_page_config(page_title="장중 실시간 주도주 마스터 스캐너 Pro", layout="wide")
 
-# 🛡️ [수술 완료]: 화면 입력창을 제거하고 오직 Secrets 내부 키값으로만 다이렉트 매핑 (유령 공백 제거 포함)
+# 🛡️ Secrets 내부 키값으로만 다이렉트 매핑 (유령 공백 제거 포함)
 APP_KEY = st.secrets.get("HANTU_APP_KEY", "").strip()
 APP_SECRET = st.secrets.get("HANTU_APP_SECRET", "").strip()
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "").strip()
@@ -22,19 +22,16 @@ if "last_pool" not in st.session_state: st.session_state.last_pool = []
 if "net_log" not in st.session_state: st.session_state.net_log = "🔌 주도주 실시간 파이프라인 대기 중..."
 
 KST = timezone(timedelta(hours=9))
-now_kst = datetime.now(tz=KST)
-current_time_str = now_kst.strftime("%H:%M:%S")
-
 TOKEN_FILE = "hantu_token_cache.json"
 
-st.title("🎯 AI 당일 상승 주도주 실시간 스캐너 (주성엔지니어링 × 파두 고정 포착판)")
+st.title("🎯 AI 당일 상승 주도주 실시간 스캐너 (순수 거래대금 대장주 전광판)")
 st.warning(f"📡 **실시간 라인 진단 모니터:** {st.session_state.net_log}")
 st.write("---")
 
 # =====================================================================
-# 🏹 주성과 파두를 절대로 놓치지 않는 특화형 거래대금 소싱 엔진
+# 🏹 대한민국 시장 돈의 흐름을 1위부터 긁어오는 정순위 수급 엔진
 # =====================================================================
-class HantuLockInEngine:
+class HantuPureSpeedEngine:
     def __init__(self):
         self.session = requests.Session()
         
@@ -79,40 +76,10 @@ class HantuLockInEngine:
             st.session_state.net_log = f"❌ 인증 연결 실패 -> {str(e)}"
         return None
 
-    def fetch_single_stock_search(self, token, query_code):
-        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
-        headers = {
-            "content-type": "application/json; charset=utf-8", 
-            "authorization": f"Bearer {token}",
-            "appkey": APP_KEY, 
-            "appsecret": APP_SECRET, 
-            "tr_id": "FHPST01010000", 
-            "custtype": "P"
-        }
-        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": query_code}
-        try:
-            r = self.session.get(url, headers=headers, params=params, timeout=3.0)
-            if r.status_code == 200:
-                res_json = r.json()
-                out = res_json.get("output") if res_json.get("output") else res_json.get("output1")
-                if out:
-                    p_str = "".join(filter(str.isdigit, str(out.get("stck_prpr", "0"))))
-                    price = int(p_str) if p_str else 0
-                    
-                    ctrt = float(out.get("prdy_ctrt", 0.0))
-                    stat = str(out.get("iscd_stat_cls_code", "00")).strip()
-                    
-                    v_str = "".join(filter(str.isdigit, str(out.get("acml_tr_pbmn", "0"))))
-                    raw_amt = float(v_str) if v_str else 0.0
-                    
-                    return {"price": price, "ctrt": ctrt, "amt": raw_amt, "stat": stat}
-        except: pass
-        return None
-
     def fetch_market_pool_by_indices(self, token):
         pool = []
-        rank_map = {}
         
+        # 한투 실전망 공식 거래량/거래대금 상위 창구 타격
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
             "content-type": "application/json; charset=utf-8", 
@@ -128,7 +95,7 @@ class HantuLockInEngine:
             "FID_COND_SCR_DIV_CODE": "20171",
             "FID_INPUT_ISCD": "0000", 
             "FID_DIV_CLS_CODE": "0", 
-            "FID_SORT_CLS_CODE": "4",       
+            "FID_SORT_CLS_CODE": "4",       # 4: 거래대금 순위 정렬 고정
             "FID_BLNG_CLS_CODE": "0",
             "FID_TRGT_CLS_CODE": "00000000",
             "FID_TRGT_EXCL_CLS_CODE": "00000000",
@@ -147,6 +114,7 @@ class HantuLockInEngine:
                     if not t_code.isdigit(): continue
                     
                     name = str(item.get("hts_kor_isnm", item.get("data_name", ""))).strip()
+                    # 단타 효율 극대화를 위해 거래 패널티를 가진 우회 자산(스팩, 리츠 등) 필터링
                     if any(k in name for k in ["스팩", "리츠", "인버스", "레버리지", "KODEX", "TIGER"]): continue
                     
                     p_str_raw = "".join(filter(str.isdigit, str(item.get("stck_prpr", "0"))))
@@ -156,31 +124,23 @@ class HantuLockInEngine:
                     stat = str(item.get("iscd_stat_cls_code", "00")).strip()
                     raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
                     
+                    # 단타 진입 시 호가 공백이 심한 초소형 동전주(5,000원 이하) 필터링 탈락
                     if price < 5000: continue
-                    if ctrt <= 0.0: continue 
+                    if ctrt <= 0.0: continue # 마이너스 및 보합 종목 전면 파쇄 (오직 양봉만)
                     
-                    rank_map[t_code] = True
                     pool.append((rank_idx + 1, t_code, name, ctrt, raw_amt, stat))
         except Exception as e:
             st.session_state.net_log = f"❌ 데이터 조회망 패킷 통신 무너짐: {str(e)}"
 
-        target_watchlist = [("036930", "주성엔지니어링"), ("044010", "파두")]
-        for ticker, name in target_watchlist:
-            if ticker not in rank_map:
-                time.sleep(0.25) 
-                s_res = self.fetch_single_stock_search(token, ticker)
-                if s_res and s_res["ctrt"] > 0.0: 
-                    pool.append((999, ticker, name, s_res["ctrt"], s_res["amt"], s_res["stat"]))
-
-        st.session_state.net_log = f"🟢 한투 실전망 주성 × 파두 관제 성공! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
-        pool.sort(key=lambda x: x[0])
+        st.session_state.net_log = f"🟢 한투 실전망 실시간 대장주 순수 동기화 완료! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
+        pool.sort(key=lambda x: x[0]) # 한투 공식 순위 우선 정렬
         return pool
 
 # =====================================================================
-# ⚡ [상시 표출 시스템]: 사용자가 들어오자마자 무조건 대장주 20개 자동 소싱
+# ⚡ [상시 표출 시스템]: 사용자가 들어오자마자 무조건 라이브 수급 데이터 로드
 # =====================================================================
 def force_sync_load():
-    engine = HantuLockInEngine()
+    engine = HantuPureSpeedEngine()
     token = engine.get_token()
     if token:
         st.session_state.last_pool = engine.fetch_market_pool_by_indices(token)
@@ -212,7 +172,7 @@ if btn_fetch:
 # =====================================================================
 # 📊 [상단 구역] 플러스 상승 우량주 전용 종합 수급 표
 # =====================================================================
-st.markdown("### 📊 당일 실시간 상승(+) 주도주 마스터 종합 순위표 (상시 관제 모드)")
+st.markdown("### 📊 당일 실시간 상승(+) 주도주 마스터 종합 순위표 (순수 수급 관제 모드)")
 
 display_list = []
 if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
@@ -226,23 +186,20 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             elif stat == "51": stat_prefix = "[❌관리] "
             elif stat == "57": stat_prefix = "[🔥경고] "
 
-            if "주성엔지니어링" in n or "파두" in n:
-                display_name = f"💎[핵심분석-락인] {stat_prefix}{n}"
-                rank_grade = "🔥 1단계: A급 (지수 주도주)"
-                action_tag = "🎯 대표님 전용 고정 포착 타깃 종목 (하단 분봉 차트 연동 완료)"
-            elif raw_rank <= 30 and ctrt >= 5.0:
+            # ⚡ [수술 완료]: 특정 종목 조건문을 완전히 폐기하고 순수 대금 크기로 등급 부여
+            if raw_rank <= 20 and ctrt >= 4.0:
                 display_name = f"🔥[우량주도-최강] {stat_prefix}{n}"
-                rank_grade = "🔥 1단계: A급 (시세 분출)"
-                action_tag = "🚀 대한민국 시장 자금을 싹 쓸어담는 핵심 대장 (최우선 공략)"
+                rank_grade = "🔥 1단계: A급 (시세 강력 분출)"
+                action_tag = "🚀 대한민국 시장 자금을 가장 빠르게 빨아들이는 핵심 대장 (최우선 타깃)"
             else:
                 display_name = f"{stat_prefix}{n}"
-                rank_grade = "⚡ 2단계: B급 (견고한 양봉 흐름)"
-                action_tag = "🟢 수급 확인 완료 / 하단 차트 패널에서 분봉 눌림목 스캘핑 영역 포착"
+                rank_grade = "⚡ 2단계: B급 (견고한 거래량 쏠림)"
+                action_tag = "🟢 수급 확인 완료 / 하단 차트 패널에서 당일 분봉 실시간 파동 추적"
 
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
             display_list.append({
-                "당일 대금 순위": f"{raw_rank}위" if raw_rank <= 100 else "100위권 밖",
+                "당일 대금 순위": f"{raw_rank}위",
                 "종목코드": t,
                 "종목명": display_name,
                 "수급 등급 분류": rank_grade,
@@ -260,10 +217,8 @@ selected_name = None
 if not df_final.empty:
     df_final.insert(0, "선택", False)
     
-    for i, r in df_final.iterrows():
-        if "주성엔지니어링" in r["종목명"]:
-            df_final.loc[i, "선택"] = True
-            break
+    # ⚡ 첫 줄 종목에 기본 무조건 체크 가동 (초기 차트 표출 세팅)
+    df_final.loc[0, "선택"] = True
 
     edited_df = st.data_editor(
         df_final,
@@ -284,7 +239,7 @@ if not df_final.empty:
         raw_selected_name = df_final.iloc[0]["종목명"]
         selected_name = raw_selected_name.split("]")[-1].strip()
 else:
-    st.info("📥 한투 실전망 라인을 연결하는 중입니다. 잠시만 기다려주십시오.")
+    st.info("📥 한투 실전망 파이프라인을 연동하는 중입니다. 잠시만 기다려주십시오.")
 
 st.write("---")
 
