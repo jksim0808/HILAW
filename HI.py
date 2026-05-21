@@ -77,7 +77,6 @@ class HantuPureSpeedEngine:
         return None
 
     def fetch_single_stock_backup(self, token, query_code):
-        """[긴급 수술 부품]: 순위권 밖에 숨어있는 대형주 다이렉트 강제 파싱 전용 API"""
         url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
         headers = {
             "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
@@ -101,7 +100,7 @@ class HantuPureSpeedEngine:
 
     def fetch_market_pool_by_indices(self, token):
         pool = []
-        rank_map = {} # 발견된 종목 매핑 가드
+        rank_map = {}
         
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
@@ -155,14 +154,12 @@ class HantuPureSpeedEngine:
         except Exception as e:
             st.session_state.net_log = f"❌ 데이터 조회망 패킷 통신 무너짐: {str(e)}"
 
-        # ⚡ [강제 포획 핵심 기믹]: 만약 100위권 순위 내에 2대 반도체 대장이 누락되었다면 백업 레이더 발동
         watchlist_backups = [("000660", "SK하이닉스"), ("005930", "삼성전자")]
         for b_code, b_name in watchlist_backups:
             if b_code not in rank_map:
-                time.sleep(0.2) # 트래픽 안전 지연
+                time.sleep(0.2) 
                 b_res = self.fetch_single_stock_backup(token, b_code)
                 if b_res:
-                    # 999위 가상 랭크를 부여해 생존 명부에 무조건 강제 이식
                     pool.append((999, b_code, b_name, b_res["price"], b_res["ctrt"], b_res["amt"], b_res["stat"]))
 
         st.session_state.net_log = f"🟢 한투 실전망 대장주 순수 동기화 완료! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
@@ -203,11 +200,11 @@ if btn_fetch:
         st.rerun()
 
 # =====================================================================
-# 📊 [상단 구역] 종합 수급 표
+# 🎯 [핵심 패치 영역]: 대표님 전용 실시간 최적 단타 타깃 추출 연산부
 # =====================================================================
-st.markdown("### 📊 당일 실시간 주도주 마스터 종합 순위표 (대형주 매칭 상시 관제 모드)")
+scalping_targets = []
+normal_display_list = []
 
-display_list = []
 if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
     for row in st.session_state.last_pool:
         if isinstance(row, tuple) and len(row) == 7: 
@@ -221,64 +218,88 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
 
             mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
             is_mega_cap = (t in mega_cap_codes or "하이닉스" in n or "삼성전자" in n or "현대차" in n)
-
-            if raw_rank == 999:
-                display_name = f"🏛️[순위권밖-강제포획] {stat_prefix}{n}"
-                rank_grade = "📊 지수 연동형 메가크라운 대형주"
-                action_tag = f"⚡ 한투 100위권 밖에 위치함 / 실시간 시황 관제를 위해 백업 엔진으로 강제 연동 완료"
-            elif raw_rank <= 20 and ctrt >= 4.0 and not is_mega_cap:
-                display_name = f"🔥[우량주도-최강] {stat_prefix}{n}"
-                rank_grade = "🔥 1단계: A급 (시세 강력 분출)"
-                action_tag = "🚀 대한민국 시장 자금을 가장 빠르게 빨아들이는 핵심 대장 (최우선 타깃)"
-            elif is_mega_cap:
-                display_name = f"🏛️[시장지수-대장] {stat_prefix}{n}"
-                rank_grade = "📊 지수 연동형 메가크라운 대형주"
-                action_tag = f"⚡ 대한민국 증시 지수 상위 대장주 (장중 시황 연동 및 호가판 분석용)"
-            else:
-                display_name = f"{stat_prefix}{n}"
-                rank_grade = "⚡ 2단계: B급 (견고한 거래량 쏠림)"
-                action_tag = "🟢 수급 확인 완료 / 하단 차트 패널에서 당일 분봉 실시간 파동 추적"
-
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
-            display_list.append({
+            # 🛠️ [실전 단타 매칭 조건]: 대금 순위 20위 안 + 등락률 +4% ~ +12% 사이 + 대형주 제외
+            if raw_rank <= 20 and (4.0 <= ctrt <= 12.0) and not is_mega_cap:
+                scalping_targets.append({
+                    "포착순위": f"🔥 {len(scalping_targets) + 1}순위",
+                    "종목코드": t,
+                    "종목명": f"🎯[단타타깃] {stat_prefix}{n}",
+                    "현재가": f"{price:,}원",
+                    "등락률": f"{ctrt:+.2f}%",
+                    "당일 거래대금": amt_display,
+                    "실전 타격 지침": "🚀 거래대금 상위권 폭발! 등락률 +4%~12% 꿀맛 단타 타점 (하단 분봉 눌림목 관찰)"
+                })
+            
+            # 하단 마스터 시황판 리스트 적재 (기존 뷰 유지)
+            if raw_rank == 999:
+                d_name, r_grade, a_tag = f"🏛️[순위권밖-강제포획] {stat_prefix}{n}", "📊 지수 연동형 메가크라운 대형주", "⚡ 한투 100위권 밖에 위치함 / 실시간 백업 엔진 자동 연동"
+            elif raw_rank <= 20 and ctrt >= 4.0 and not is_mega_cap:
+                d_name, r_grade, a_tag = f"🔥[우량주도-최강] {stat_prefix}{n}", "🔥 1단계: A급 (시세 강력 분출)", "🚀 대한민국 시장 자금을 가장 빠르게 빨아들이는 핵심 대장"
+            elif is_mega_cap:
+                d_name, r_grade, a_tag = f"🏛️[시장지수-대장] {stat_prefix}{n}", "📊 지수 연동형 메가크라운 대형주", "⚡ 대한민국 증시 지수 상위 대장주 (장중 시황 체크용)"
+            else:
+                d_name, r_grade, a_tag = f"{stat_prefix}{n}", "⚡ 2단계: B급 (견고한 거래량 쏠림)", "🟢 수급 확인 완료 / 하단 차트 패널에서 분봉 파동 추적"
+
+            normal_display_list.append({
                 "당일 대금 순위": "100위권 밖" if raw_rank == 999 else f"{raw_rank}위",
                 "종목코드": t,
-                "종목명": display_name,
-                "수급 등급 분류": rank_grade,
+                "종목명": d_name,
+                "수급 등급 분류": r_grade,
                 "현재가": f"{price:,}원", 
                 "등락률": f"{ctrt:+.2f}%" if ctrt > 0 else f"{ctrt:.2f}%",
                 "당일 누적대금": amt_display,
-                "실전 행동 지침": action_tag
+                "실전 행동 지침": a_tag
             })
 
-df_final = pd.DataFrame(display_list)
+df_scalping = pd.DataFrame(scalping_targets)
+df_normal = pd.DataFrame(normal_display_list)
 
 selected_ticker = None
 selected_name = None
 
-if not df_final.empty:
-    df_final.insert(0, "선택", False)
-    df_final.loc[0, "선택"] = True
-
-    edited_df = st.data_editor(
-        df_final,
-        use_container_width=True,
-        hide_index=True,
-        column_config={"선택": st.column_config.CheckboxColumn(required=True)},
-        disabled=["당일 대금 순위", "종목코드", "종목명", "수급 등급 분류", "현재가", "등락률", "당일 누적대금", "실전 행동 지침"],
-        height=450
-    )
+# =====================================================================
+# 🖥️ 상단 전광판 렌더링 구역 (단타 타깃 vs 종합 마스터 시황판)
+# =====================================================================
+st.markdown("## 🎯 [대표님 전용] AI 장중 변동성 실시간 단타 최우선 타깃")
+if not df_scalping.empty:
+    df_scalping.insert(0, "선택", False)
+    # ⚡ 장중 단타 1순위 종목에 무조건 자동 체크박스 활성화 가동
+    df_scalping.loc[0, "선택"] = True
     
-    selected_rows = edited_df[edited_df["선택"] == True]
-    if not selected_rows.empty:
-        selected_ticker = selected_rows.iloc[0]["종목코드"]
-        raw_selected_name = selected_rows.iloc[0]["종목명"]
-        selected_name = raw_selected_name.split("]")[-1].strip()
+    edited_sc_df = st.data_editor(
+        df_scalping, use_container_width=True, hide_index=True,
+        column_config={"선택": st.column_config.CheckboxColumn(required=True)},
+        disabled=["포착순위", "종목코드", "종목명", "현재가", "등락률", "당일 거래대금", "실전 타격 지침"],
+        height=200
+    )
+    sc_selected = edited_sc_df[edited_sc_df["선택"] == True]
+    if not sc_selected.empty:
+        selected_ticker = sc_selected.iloc[0]["종목코드"]
+        selected_name = sc_selected.iloc[0]["종목명"].split("]")[-1].strip()
+else:
+    st.info("💡 지금 이 순간에는 거래대금 상위 20위 내에서 등락률 +4% ~ +12% 규격에 맞는 안전한 단타 주도주가 없습니다. 무리한 진입 금지 / 하단 마스터 시황판을 점검해 주십시오.")
+
+st.markdown("### 📊 당일 실시간 주도주 마스터 종합 순위표 (시황 전광판)")
+if not df_normal.empty:
+    # 단타 전광판에 아무것도 안 켜졌을 때만 종합 시황판에서 첫 줄 자동 선택 보정
+    if not selected_ticker:
+        df_normal.insert(0, "선택", False)
+        df_normal.loc[0, "선택"] = True
+        
+        edited_nm_df = st.data_editor(
+            df_normal, use_container_width=True, hide_index=True,
+            column_config={"선택": st.column_config.CheckboxColumn(required=True)},
+            disabled=["당일 대금 순위", "종목코드", "종목명", "수급 등급 분류", "현재가", "등락률", "당일 누적대금", "실전 행동 지침"],
+            height=350
+        )
+        nm_selected = edited_nm_df[edited_nm_df["선택"] == True]
+        if not nm_selected.empty:
+            selected_ticker = nm_selected.iloc[0]["종목코드"]
+            selected_name = nm_selected.iloc[0]["종목명"].split("]")[-1].strip()
     else:
-        selected_ticker = df_final.iloc[0]["종목코드"]
-        raw_selected_name = df_final.iloc[0]["종목명"]
-        selected_name = raw_selected_name.split("]")[-1].strip()
+        st.dataframe(df_normal, use_container_width=True, hide_index=True, height=350)
 else:
     st.info("📥 한투 실전망 파이프라인을 연동하는 중입니다. 잠시만 기다려주십시오.")
 
