@@ -76,8 +76,32 @@ class HantuPureSpeedEngine:
             st.session_state.net_log = f"❌ 인증 연결 실패 -> {str(e)}"
         return None
 
+    def fetch_single_stock_backup(self, token, query_code):
+        """[긴급 수술 부품]: 순위권 밖에 숨어있는 대형주 다이렉트 강제 파싱 전용 API"""
+        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
+        headers = {
+            "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
+            "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01010000", "custtype": "P"
+        }
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": query_code}
+        try:
+            r = self.session.get(url, headers=headers, params=params, timeout=3.0)
+            if r.status_code == 200:
+                out = r.json().get("output", {})
+                if out:
+                    p_str = "".join(filter(str.isdigit, str(out.get("stck_prpr", "0"))))
+                    price = int(p_str) if p_str else 0
+                    ctrt = float(out.get("prdy_ctrt", 0.0))
+                    stat = str(out.get("iscd_stat_cls_code", "00")).strip()
+                    v_str = "".join(filter(str.isdigit, str(out.get("acml_tr_pbmn", "0"))))
+                    raw_amt = float(v_str) if v_str else 0.0
+                    return {"price": price, "ctrt": ctrt, "amt": raw_amt, "stat": stat}
+        except: pass
+        return None
+
     def fetch_market_pool_by_indices(self, token):
         pool = []
+        rank_map = {} # 발견된 종목 매핑 가드
         
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
@@ -90,18 +114,10 @@ class HantuPureSpeedEngine:
         }
         
         params_vol = {
-            "FID_COND_MRKT_DIV_CODE": "J", 
-            "FID_COND_SCR_DIV_CODE": "20171",
-            "FID_INPUT_ISCD": "0000", 
-            "FID_DIV_CLS_CODE": "0", 
-            "FID_SORT_CLS_CODE": "4",       
-            "FID_BLNG_CLS_CODE": "0",
-            "FID_TRGT_CLS_CODE": "00000000",
-            "FID_TRGT_EXCL_CLS_CODE": "00000000",
-            "FID_INPUT_PRICE_1": "0",
-            "FID_INPUT_PRICE_2": "0",
-            "FID_VOL_CNT": "",              
-            "FID_INPUT_DATE_1": ""          
+            "FID_COND_MRKT_DIV_CODE": "J", "FID_COND_SCR_DIV_CODE": "20171",
+            "FID_INPUT_ISCD": "0000", "FID_DIV_CLS_CODE": "0", "FID_SORT_CLS_CODE": "4",       
+            "FID_BLNG_CLS_CODE": "0", "FID_TRGT_CLS_CODE": "00000000", "FID_TRGT_EXCL_CLS_CODE": "00000000",
+            "FID_INPUT_PRICE_1": "0", "FID_INPUT_PRICE_2": "0", "FID_VOL_CNT": "", "FID_INPUT_DATE_1": ""          
         }
         
         try:
@@ -122,7 +138,6 @@ class HantuPureSpeedEngine:
                     name = str(item.get("hts_kor_isnm", item.get("data_name", ""))).strip()
                     if any(k in name for k in ["스팩", "리츠", "인버스", "레버리지", "KODEX", "TIGER"]): continue
                     
-                    # 🔑 [현재가 정밀 추출] 한투 원본 값에서 순수 숫자만 발라내 정수형 변환
                     p_str_raw = "".join(filter(str.isdigit, str(item.get("stck_prpr", "0"))))
                     price = int(p_str_raw) if p_str_raw else 0
                     
@@ -135,10 +150,20 @@ class HantuPureSpeedEngine:
                     if price < 5000 and not is_mega_cap: continue
                     if ctrt <= 0.0 and not is_mega_cap: continue 
                     
-                    # ⚡ 튜플에 정확히 7개 인자(price 포함) 채워서 데이터 풀 생성
+                    rank_map[t_code] = True
                     pool.append((rank_idx + 1, t_code, name, price, ctrt, raw_amt, stat))
         except Exception as e:
             st.session_state.net_log = f"❌ 데이터 조회망 패킷 통신 무너짐: {str(e)}"
+
+        # ⚡ [강제 포획 핵심 기믹]: 만약 100위권 순위 내에 2대 반도체 대장이 누락되었다면 백업 레이더 발동
+        watchlist_backups = [("000660", "SK하이닉스"), ("005930", "삼성전자")]
+        for b_code, b_name in watchlist_backups:
+            if b_code not in rank_map:
+                time.sleep(0.2) # 트래픽 안전 지연
+                b_res = self.fetch_single_stock_backup(token, b_code)
+                if b_res:
+                    # 999위 가상 랭크를 부여해 생존 명부에 무조건 강제 이식
+                    pool.append((999, b_code, b_name, b_res["price"], b_res["ctrt"], b_res["amt"], b_res["stat"]))
 
         st.session_state.net_log = f"🟢 한투 실전망 대장주 순수 동기화 완료! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
         pool.sort(key=lambda x: x[0]) 
@@ -178,14 +203,14 @@ if btn_fetch:
         st.rerun()
 
 # =====================================================================
-# 📊 [상단 구역] 종합 수급 표 (동기화 블록 정밀 결속 수술)
+# 📊 [상단 구역] 종합 수급 표
 # =====================================================================
 st.markdown("### 📊 당일 실시간 주도주 마스터 종합 순위표 (대형주 매칭 상시 관제 모드)")
 
 display_list = []
 if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
     for row in st.session_state.last_pool:
-        if isinstance(row, tuple) and len(row) == 7: # 7개 인자 구조 동기화 검증
+        if isinstance(row, tuple) and len(row) == 7: 
             raw_rank, t, n, price, ctrt, amt, stat = row
             
             stat_prefix = ""
@@ -197,7 +222,11 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
             is_mega_cap = (t in mega_cap_codes or "하이닉스" in n or "삼성전자" in n or "현대차" in n)
 
-            if raw_rank <= 20 and ctrt >= 4.0 and not is_mega_cap:
+            if raw_rank == 999:
+                display_name = f"🏛️[순위권밖-강제포획] {stat_prefix}{n}"
+                rank_grade = "📊 지수 연동형 메가크라운 대형주"
+                action_tag = f"⚡ 한투 100위권 밖에 위치함 / 실시간 시황 관제를 위해 백업 엔진으로 강제 연동 완료"
+            elif raw_rank <= 20 and ctrt >= 4.0 and not is_mega_cap:
                 display_name = f"🔥[우량주도-최강] {stat_prefix}{n}"
                 rank_grade = "🔥 1단계: A급 (시세 강력 분출)"
                 action_tag = "🚀 대한민국 시장 자금을 가장 빠르게 빨아들이는 핵심 대장 (최우선 타깃)"
@@ -212,10 +241,8 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
 
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
-            # 🛠️ [수술 완료] 표를 빌드할 때 '현재가' 데이터에 이전 안내 문구를 흔적도 없이 밀어버리고 
-            # 한투에서 실시간으로 긁어온 순정 숫자 주가 변수(price)를 강제로 가공 연결(f"{price:,}원")
             display_list.append({
-                "당일 대금 순위": f"{raw_rank}위",
+                "당일 대금 순위": "100위권 밖" if raw_rank == 999 else f"{raw_rank}위",
                 "종목코드": t,
                 "종목명": display_name,
                 "수급 등급 분류": rank_grade,
