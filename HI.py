@@ -2,9 +2,8 @@ import requests
 import json
 import pandas as pd
 import time
-import asyncio
+import re
 from datetime import datetime
-from telegram import Bot
 import pytz
 import streamlit as st
 
@@ -16,40 +15,51 @@ st.set_page_config(page_title="한투 주도주 감시봇", layout="wide")
 # 한국 표준시(KST) 타임존 정의
 KST = pytz.timezone('Asia/Seoul')
 
-# ==========================================
-# 2. 사이드바 - 텔레그램 설정 및 모바일용 간단 설명서
-# ==========================================
-st.sidebar.header("🤖 나만의 텔레그램 알림 설정")
-st.sidebar.markdown("이곳에 본인의 키를 입력하면 개인 알림을 받을 수 있습니다. 입력하지 않으면 개발자의 기본 방으로 알림이 전송됩니다.")
+# 세션 안전 초기화
+def get_secret(key, default=""):
+    if key in st.secrets:
+        return st.secrets[key]
+    return default
 
-user_token = st.sidebar.text_input("텔레그램 봇 토큰 입력", type="password", help="BotFather에게 받은 토큰을 넣으세요.")
-user_chat_id = st.sidebar.text_input("내 채팅방 ID 입력", help="@userinfobot에게 받은 ID(숫자)를 넣으세요.")
+# ==========================================
+# 2. 사이드바 - 인증키 제어 센터 (Secrets 자동 감지 포함)
+# ==========================================
+st.sidebar.header("🔑 Open API & 알림 설정")
 
-# 사용자가 입력한 값이 있으면 그것을 쓰고, 없으면 스트림릿 Secrets의 기본값(내 방)을 사용합니다.
-APP_KEY = st.secrets["APP_KEY"]
-APP_SECRET = st.secrets["APP_SECRET"]
+# 한투 Key 설정
+st.sidebar.subheader("1. 한국투자증권 인증")
+sc_app_key = get_secret("APP_KEY")
+sc_app_secret = get_secret("APP_SECRET")
+
+user_app_key = st.sidebar.text_input("한투 App Key 입력", value=sc_app_key, type="password")
+user_app_secret = st.sidebar.text_input("한투 App Secret 입력", value=sc_app_secret, type="password")
+
+# 텔레그램 설정
+st.sidebar.subheader("2. 텔레그램 알림")
+sc_token = get_secret("TELEGRAM_TOKEN")
+sc_chat_id = get_secret("CHAT_ID")
+
+user_token = st.sidebar.text_input("텔레그램 봇 토큰 입력", value=sc_token, type="password")
+user_chat_id = st.sidebar.text_input("내 채팅방 ID 입력", value=sc_chat_id)
+
+APP_KEY = user_app_key
+APP_SECRET = user_app_secret
 URL_BASE = "https://openapi.koreainvestment.com:9443"
 
-TELEGRAM_TOKEN = user_token if user_token else st.secrets["TELEGRAM_TOKEN"]
-CHAT_ID = user_chat_id if user_chat_id else st.secrets["CHAT_ID"]
+TELEGRAM_TOKEN = user_token
+CHAT_ID = user_chat_id
 
-# 📱 다른 사람들을 위해 사이드바에 접이식 설명서 추가!
-st.sidebar.markdown("---")
-with st.sidebar.expander("ℹ️ 텔레그램 토큰 / ID 만드는 방법"):
+# 📱 텔레그램 도움말 접이식 배치
+with st.sidebar.expander("ℹ️ 텔레그램 연동방법"):
     st.markdown("""
     **1. 봇 토큰(TOKEN) 만들기**
-    1. 텔레그램에 **@BotFather** 검색 후 **[시작]**
-    2. 채팅창에 **`/newbot`** 입력
-    3. 봇 이름 입력 (예: `내주식비서`)
-    4. 봇 아이디 입력 (영어 필수, 끝이 반드시 **`_bot`**으로 끝나야 함)
-    5. 생성 완료 후 **`Use this token...`** 아래의 긴 문자열 복사!
-    
-    ---
+    1. 텔레그램 **@BotFather** 검색 후 시작
+    2. `/newbot` 입력 후 봇 이름 및 아이디 생성
+    3. 발급된 **`Use this token...`** 뒤 문자열 복사 붙여넣기
     
     **2. 내 채팅방 ID 찾기**
-    1. ⚠️ **중요:** 방금 내가 만든 봇을 검색해 들어가서 **[시작]**을 먼저 꼭 누르세요! (선톡 필수)
-    2. 텔레그램에 **@userinfobot** 검색 후 **[시작]**
-    3. 즉시 나타나는 정보 중 **`Id: 9~10자리 숫자`**를 복사!
+    1. 방금 만든 봇 방에 들어가서 **[시작]** 누르기 (선톡 필수)
+    2. **@userinfobot** 검색 후 시작하여 내 **`Id: 숫자`** 복사 붙여넣기
     """)
 
 # ==========================================
@@ -61,22 +71,35 @@ if 'current_date' not in st.session_state:
     st.session_state['current_date'] = datetime.now(KST).strftime("%Y%m%d")
 if 'detected_list' not in st.session_state:
     st.session_state['detected_list'] = []  
+if 'clicked_stock' not in st.session_state:
+    st.session_state.clicked_stock = None
 
 # ==========================================
-# 4. 핵심 백엔드 기능 함수들
+# 4. 핵심 백엔드 기능 함수들 (동기식 교체 및 안전 파싱)
 # ==========================================
 def get_access_token():
+    if not APP_KEY or not APP_SECRET:
+        return None
     headers = {"content-type": "application/json"}
     body = {"grant_type": "client_credentials", "appkey": APP_KEY, "secretkey": APP_SECRET}
-    res = requests.post(f"{URL_BASE}/oauth2/tokenP", headers=headers, data=json.dumps(body))
-    return res.json()["access_token"]
-
-async def send_telegram_msg(token, chat_id, text):
     try:
-        bot = Bot(token=token)
-        await bot.send_message(chat_id=chat_id, text=text)
+        res = requests.post(f"{URL_BASE}/oauth2/tokenP", headers=headers, data=json.dumps(body), timeout=5)
+        if res.status_code == 200:
+            return res.json().get("access_token")
     except Exception as e:
-        print(f"텔레그램 발송 실패: {e}")
+        st.error(f"토큰 발급 중 서버 연결 오류: {e}")
+    return None
+
+def send_telegram_msg_sync(token, chat_id, text):
+    """[동기식 연동] Streamlit 프로세스 락 현상을 완벽하게 방지하는 동기 통신 모듈"""
+    if not token or not chat_id:
+        return
+    url = f"https://api.telegram.com/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        print(f"텔레그램 전송 실패: {e}")
 
 def check_market_time():
     now = datetime.now(KST)
@@ -99,6 +122,10 @@ def run_monitoring():
 
     try:
         token = get_access_token()
+        if not token:
+            st.warning("⚠️ 한투 API 키 및 보안 자격 증명이 활성화되지 않았습니다. 사이드바 설정을 확인하세요.")
+            return
+
         headers = {
             "content-type": "application/json",
             "authorization": f"Bearer {token}",
@@ -108,9 +135,12 @@ def run_monitoring():
         }
         params = {"user_id": "", "seq": "", "data_cnt": "", "ranking_option": "1", "market_div": "0000", "industry_div": "0000"}
         
-        res = requests.get(f"{URL_BASE}/uapi/domestic-stock/v1/ranking/trade-vol", headers=headers, params=params)
-        data = res.json()['output']
+        res = requests.get(f"{URL_BASE}/uapi/domestic-stock/v1/ranking/trade-vol", headers=headers, params=params, timeout=10)
+        data = res.json().get('output', [])
         
+        if not data:
+            return
+
         df = pd.DataFrame(data)
         df['stck_prpr'] = df['stck_prpr'].astype(int)
         df['stck_hgpr'] = df['stck_hgpr'].astype(int)
@@ -119,11 +149,13 @@ def run_monitoring():
         
         df['volatility'] = ((df['stck_hgpr'] - df['stck_lwpr']) / df['stck_prpr'] * 100).round(2)
         
-        # 필터: 거래대금 200억 이상 & 하루 변동폭 3% 이상
-        target_stocks = df[(df['acml_tr_pbmn'] >= 200) & (df['volatility'] >= 3.0)]
+        # 필터: 거래대금 100억 이상 & 하루 변동폭 3% 이상
+        target_stocks = df[(df['acml_tr_pbmn'] >= 100) & (df['volatility'] >= 3.0)]
         
         for _, row in target_stocks.iterrows():
-            code = row['mkte_ticker']
+            raw_code = row['mkte_ticker']
+            # 불필요한 알파벳 머리말 제거 후 6자리 순수 숫자로 정제
+            code = ''.join(filter(str.isdigit, raw_code))[:6]
             name = row['hts_kor_isnm']
             vol = row['volatility']
             price = row['stck_prpr']
@@ -134,13 +166,15 @@ def run_monitoring():
                 continue
                 
             msg = (
-                f"🚀 [주도주 포착 - 변동폭 3% / 거래대금 200억 돌파] 🚀\n\n"
+                f"🚀 [주도주 포착 - 변동폭 3% / 거래대금 100억 돌파] 🚀\n\n"
                 f"📌 종목명: {name} ({code})\n"
                 f"📈 현재가: {price:,}원\n"
                 f"⚡ 당일 고저 변동폭: {vol}%\n"
                 f"💰 현재 거래대금: {money:,}억"
             )
-            asyncio.run(send_telegram_msg(TELEGRAM_TOKEN, CHAT_ID, msg))
+            
+            # 동기식 텔레그램 연동 발송
+            send_telegram_msg_sync(TELEGRAM_TOKEN, CHAT_ID, msg)
             st.session_state['sent_stocks'].add(code)
             
             new_item = {
@@ -157,9 +191,10 @@ def run_monitoring():
         print(f"데이터 조회 중 에러 발생: {e}")
 
 # ==========================================
-# 5. 프론트엔드 UI (Streamlit 대시보드 화면)
+# 5. 프론트엔드 UI 및 대시보드 출력 구역
 # ==========================================
-st.title("🔥 한국투자증권 실시간 주도주 대시보드 (3% / 200억)")
+st.title("🔥 한국투자증권 실시간 주도주 대시보드 (3% / 100억)")
+st.caption("실시간 수급 모니터링 시스템 + 텔레그램 동기 연동형 관제 시스템")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -169,30 +204,64 @@ with col2:
 
 st.markdown("---")
 st.subheader("🎯 장중 실시간 주도주 포착 리스트 (1분 주기)")
+st.caption("💡 아래 표에서 관심 있는 **종목 줄(Row)을 클릭**하시면 하단에 실시간 종합 호가창과 차트가 화면 내에 즉각 연동됩니다.")
 
 table_placeholder = st.empty()
 info_placeholder = st.empty()
 
 # ==========================================
-# 6. 1분(60초) 주기 백그라운드 타이머 루프
+# 6. 1분(60초) 주기 백그라운드 타이머 루프 및 인터랙티브 뷰포트
 # ==========================================
 if 'countdown' not in st.session_state:
     st.session_state['countdown'] = 0
 
-while True:
-    current_time_str = datetime.now(KST).strftime('%H:%M:%S')
-    
-    if st.session_state['countdown'] <= 0:
-        run_monitoring()
-        st.session_state['countdown'] = 60 
+# 자동 동기화 가동
+if st.session_state['countdown'] <= 0:
+    run_monitoring()
+    st.session_state['countdown'] = 60 
 
-    if st.session_state['detected_list']:
-        display_df = pd.DataFrame(st.session_state['detected_list'])
-        table_placeholder.data_editor(display_df, use_container_width=True, hide_index=True)
-    else:
-        table_placeholder.info("아직 조건(변동폭 3% 이상 & 거래대금 200억 이상)을 동시에 만족하는 주도주가 없습니다. 시장을 실시간 감시 중입니다...")
-
-    info_placeholder.text(f"⏱️ 최근 동기화 시간: {current_time_str} | 다음 자동 조회까지 {st.session_state['countdown']}초 남음...")
+if st.session_state['detected_list']:
+    display_df = pd.DataFrame(st.session_state['detected_list'])
     
-    time.sleep(1)
-    st.session_state['countdown'] -= 1
+    # on_select="rerun"을 주어 마우스 행 클릭 이벤트를 즉각적으로 획득
+    event = table_placeholder.dataframe(
+        display_df, 
+        use_container_width=True, 
+        hide_index=True, 
+        on_select="rerun", 
+        selection_mode="single-row"
+    )
+    
+    if event and event.get("selection") and event["selection"].get("rows"):
+        selected_row_idx = event["selection"]["rows"][0]
+        st.session_state.clicked_stock = display_df.iloc[selected_row_idx].to_dict()
+else:
+    table_placeholder.info("아직 조건(변동폭 3% 이상 & 거래대금 100억 이상)을 만족하는 주도주가 없습니다. 시장을 실시간 감시 중입니다...")
+
+info_placeholder.text(f"⏱️ 최근 동기화 시간: {datetime.now(KST).strftime('%H:%M:%S')} | 다음 자동 조회까지 {st.session_state['countdown']}초 남음...")
+
+# ==========================================
+# 7. 하단 실시간 네이버 모바일 종합 전광판 상시 표출 구역
+# ==========================================
+if st.session_state.clicked_stock:
+    st.markdown("---")
+    s_name = st.session_state.clicked_stock["종목명"]
+    s_code = st.session_state.clicked_stock["종목코드"]
+    
+    st.markdown(f"### 📊 [{s_name} : {s_code}] 실시간 종합 차트")
+    
+    naver_mobile_chart_url = f"https://m.stock.naver.com/domestic/stock/{s_code}/total"
+    
+    naver_chart_html = f"""
+    <div style="width: 100%; height: 650px; border-radius: 12px; overflow: hidden; border: 1px solid #e0e0e0; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+      <iframe src="{naver_mobile_chart_url}" 
+              style="width: 100%; height: 100%; border: none; margin: 0; padding: 0;" 
+              allowfullscreen></iframe>
+    </div>
+    """
+    st.components.v1.html(naver_chart_html, height=670)
+
+# 자동 카운트다운을 위한 리프레시 루프 연산 트리거
+time.sleep(1)
+st.session_state['countdown'] -= 1
+st.rerun()
