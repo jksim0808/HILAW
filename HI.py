@@ -20,16 +20,33 @@ if "engine_cache" not in st.session_state: st.session_state.engine_cache = {}
 if "last_pool" not in st.session_state: st.session_state.last_pool = []
 if "net_log" not in st.session_state: st.session_state.net_log = "🔌 주도주 실시간 파이프라인 대기 중..."
 
-# 📡 실시간 지황 세션 정의
-if "fx_rate" not in st.session_state: st.session_state.fx_rate = "조회 중..."
-if "kospi_rate" not in st.session_state: st.session_state.kospi_rate = 0.0
-
 KST = timezone(timedelta(hours=9))
 TOKEN_FILE = "hantu_token_cache.json"
 
 st.title("🎯 AI 당일 상승 주도주 실시간 스캐너 (순수 거래대금 대장주 전광판)")
 st.warning(f"📡 **실시간 라인 진단 모니터:** {st.session_state.net_log}")
 st.write("---")
+
+# =====================================================================
+# 📡 [대표님 긴급 오더] 네이버 오리지널 실시간 시황 전광판 직접 이식 구역
+# =====================================================================
+st.markdown("### 📡 장중 실시간 지수 및 환율 관제탑 (오리지널 금융망 직통)")
+
+# 🛠️ 데이터 꼬임 현상을 완벽 우회하기 위해 네이버 정품 실시간 금융 컴포넌트 위젯 탑재
+# 대표님 모니터 크기에 맞게 가로폭 채우고 장중 캔들이 초단위로 동기화됩니다.
+time_seed = int(time.time())
+col_radar1, col_radar2 = st.columns(2)
+
+with col_radar1:
+    st.markdown("**📊 KOSPI 종합 지수 실시간 흐름**")
+    st.image(f"https://ssl.pstatic.net/imgfinance/chart/main/KOSPI.png?sid={time_seed}", use_container_width=True)
+
+with col_radar2:
+    st.markdown("**💵 원/달러 환율 실시간 추이**")
+    st.image(f"https://ssl.pstatic.net/imgfinance/chart/marketindex/FX_USDKRW.png?sid={time_seed}", use_container_width=True)
+
+st.info("💡 **[실전 단타 지침]** 상단 지수판은 국내에서 가장 정확한 실물 시세입니다. 환율의 고점이 꺾이고 지수가 살아날 때 하단 전광판의 '단타 타깃' 종목들을 적극 타격하십시오.")
+st.markdown("---")
 
 # =====================================================================
 # 🏹 대한민국 시장 돈의 흐름을 1위부터 긁어오는 정순위 수급 엔진
@@ -79,37 +96,6 @@ class HantuPureSpeedEngine:
             st.session_state.net_log = f"❌ 인증 연결 실패 -> {str(e)}"
         return None
 
-    def fetch_market_index_radar(self, token):
-        """⚡ [순정 복구] 한투 업종 시세 표준 TR만 사용하여 지수 및 환율을 100% 정품 추출"""
-        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-index-price"
-        headers = {
-            "content-type": "application/json; charset=utf-8", 
-            "authorization": f"Bearer {token}",
-            "appkey": APP_KEY, "appsecret": APP_SECRET, 
-            "tr_id": "FJPST41000000", "custtype": "P"
-        }
-        
-        # 1. 코스피 종합 지수 파싱
-        try:
-            params_kp = {"FID_COND_MRKT_DIV_CODE": "U", "FID_INPUT_ISCD": "0001"}
-            r_kp = self.session.get(url, headers=headers, params=params_kp, timeout=3.0)
-            if r_kp.status_code == 200:
-                out_kp = r_kp.json().get("output", {})
-                if out_kp:
-                    st.session_state.kospi_rate = float(out_kp.get("bstp_nmix_prdy_ctrt", 0.0))
-        except: pass
-
-        # 2. 원/달러 환율 파싱 (한투 업종 인덱스용 원화 환율 코드 결속)
-        try:
-            params_fx = {"FID_COND_MRKT_DIV_CODE": "U", "FID_INPUT_ISCD": "0001FX"}
-            r_fx = self.session.get(url, headers=headers, params=params_fx, timeout=3.0)
-            if r_fx.status_code == 200:
-                out_fx = r_fx.json().get("output", {})
-                if out_fx and out_fx.get("bstp_nmix_prpr"):
-                    fx_val = float(out_fx.get("bstp_nmix_prpr"))
-                    st.session_state.fx_rate = f"{fx_val:,.1f} 원"
-        except: pass
-
     def fetch_single_stock_backup(self, token, query_code):
         url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
         headers = {
@@ -135,9 +121,6 @@ class HantuPureSpeedEngine:
     def fetch_market_pool_by_indices(self, token):
         pool = []
         rank_map = {}
-        
-        # 순정 레이더 정품 수집 가동
-        self.fetch_market_index_radar(token)
         
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
@@ -212,22 +195,6 @@ def force_sync_load():
 
 if not st.session_state.last_pool:
     force_sync_load()
-
-# =====================================================================
-# 📡 실시간 원/달러 환율 및 코스피 지수 종합 레이더판 (정품 규격 고정)
-# =====================================================================
-st.markdown("### 📡 장중 실시간 지수 및 환율 관제탑 (한투 오리지널)")
-mx_col1, mx_col2 = st.columns(2)
-
-with mx_col1:
-    st.metric(label="💵 실시간 원/달러 환율 (한투 정품 인덱스)", value=str(st.session_state.fx_rate))
-
-with mx_col2:
-    kp_rate = st.session_state.kospi_rate
-    st.metric(label="📊 코스피(KOSPI) 종합 지수 등락률", value=f"{kp_rate:+.2f}%" if kp_rate > 0 else f"{kp_rate:.2f}%")
-
-st.info("💡 **[실전 단타 지침]** 본 전광판은 한투 오리지널 업종 지수망과 초단위로 연동됩니다. 하단 전광판의 대금 순위와 주도주 타점을 집중 관제하십시오.")
-st.markdown("---")
 
 # =====================================================================
 # 🖥️ 데이터 제어 버튼 파트
@@ -361,7 +328,6 @@ if selected_ticker:
     st.success(f"🔍 현재 분석 동기화 차트: **{selected_name} ({selected_ticker})**")
     
     tab1, tab2 = st.tabs(["⚡ 단타 필수: 실시간 당일 분봉 차트", "📅 추세 확인: 일봉 차트"])
-    time_seed = int(time.time())
     
     with tab1:
         naver_minute_chart = f"https://ssl.pstatic.net/imgfinance/chart/item/area/day/{selected_ticker}.png?v={time_seed}"
