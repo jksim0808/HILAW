@@ -11,21 +11,9 @@ from datetime import datetime, timezone, timedelta
 # =====================================================================
 st.set_page_config(page_title="주성 × 파두 락인 마스터 스캐너 Pro", layout="wide")
 
-# 🛡️ 자격 증명 안전 로드 및 유령 공백 원천 박멸 (.strip())
-sec_app_key = st.secrets.get("HANTU_APP_KEY", "").strip()
-sec_app_secret = st.secrets.get("HANTU_APP_SECRET", "").strip()
-
-st.sidebar.header("🔑 한투 실전망 인증 센터")
-st.sidebar.success("🌐 통신 회선: 한국투자증권 실전 운영망 정식 연결")
-
-user_app_key = st.sidebar.text_input("한투 APP KEY", value=sec_app_key, type="password")
-user_app_secret = st.sidebar.text_input("한투 APP SECRET", value=sec_app_secret, type="password")
-
-APP_KEY = user_app_key.strip() if user_app_key else sec_app_key
-APP_SECRET = user_app_secret.strip() if user_app_secret else sec_app_secret
-
-st.sidebar.markdown("---")
-st.sidebar.header("🤖 텔레그램 알림 수신기")
+# 🛡️ [수술 완료]: 화면 입력창을 제거하고 오직 Secrets 내부 키값으로만 다이렉트 매핑 (유령 공백 제거 포함)
+APP_KEY = st.secrets.get("HANTU_APP_KEY", "").strip()
+APP_SECRET = st.secrets.get("HANTU_APP_SECRET", "").strip()
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = st.secrets.get("CHAT_ID", "").strip()
 
@@ -52,7 +40,7 @@ class HantuLockInEngine:
         
     def get_token(self):
         if not APP_KEY or not APP_SECRET:
-            st.session_state.net_log = "❌ Secrets 키 설정 오류! 앱 키가 비어있습니다."
+            st.session_state.net_log = "❌ Secrets 내부에 HANTU_APP_KEY 또는 HANTU_APP_SECRET 설정이 유실되었습니다."
             return None
 
         now_utc = datetime.now(tz=timezone.utc)
@@ -189,7 +177,7 @@ class HantuLockInEngine:
         return pool
 
 # =====================================================================
-# ⚡ [상시 표출 핵심 수술]: 사용자가 들어오자마자 메모리가 비어있으면 강제로 먼저 긁어옴
+# ⚡ [상시 표출 시스템]: 사용자가 들어오자마자 무조건 대장주 20개 자동 소싱
 # =====================================================================
 def force_sync_load():
     engine = HantuLockInEngine()
@@ -197,7 +185,6 @@ def force_sync_load():
     if token:
         st.session_state.last_pool = engine.fetch_market_pool_by_indices(token)
 
-# 🚀 화면을 처음 열었을 때(last_pool이 텅 비어있을 때) 묻지도 따지지도 않고 20개 대장주 바로 채우기
 if not st.session_state.last_pool:
     force_sync_load()
 
@@ -321,7 +308,7 @@ if selected_ticker:
         st.image(naver_day_chart, caption=f"[{selected_name}] 네이버 실시간 일봉 캔들 추세 지지선", use_container_width=True)
 
 # =====================================================================
-# ⏱️ [장중 상시 자동 관제]: 60초마다 대표님 대신 알아서 새로고침하는 무중단 타이머
+# ⏱️ [장중 상시 자동 관제]: 60초 무중단 리프레시 엔진
 # =====================================================================
 st.caption("⚙️ **자동 감시 시스템 가동 중:** 장중 최신 거래대금 파싱을 위해 60초마다 백그라운드 리프레시를 자동 수행합니다.")
 time.sleep(60)
