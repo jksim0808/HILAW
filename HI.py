@@ -15,8 +15,9 @@ st.set_page_config(page_title="주성 × 파두 락인 마스터 스캐너 Pro",
 sec_app_key = st.secrets.get("HANTU_APP_KEY", "").strip()
 sec_app_secret = st.secrets.get("HANTU_APP_SECRET", "").strip()
 
-# 사이드바 입력창 배치 (Secrets 없을 때 백업 및 실시간 수정용)
-st.sidebar.header("🔑 한투 실전망 자격 증명")
+st.sidebar.header("🔑 한투 실전망 인증 센터")
+st.sidebar.success("🌐 통신 회선: 한국투자증권 실전 운영망 정식 연결")
+
 user_app_key = st.sidebar.text_input("한투 APP KEY", value=sec_app_key, type="password")
 user_app_secret = st.sidebar.text_input("한투 APP SECRET", value=sec_app_secret, type="password")
 
@@ -66,7 +67,6 @@ class HantuLockInEngine:
             except:
                 pass
 
-        # ⚡ [정석 보정 1단계]: 토큰 발급 창구는 포트번호 없이 공통 주소 호출 (AppSec 차단 해결)
         url = "https://openapi.koreainvestment.com/oauth2/tokenP"
         body = {
             "grant_type": "client_credentials", 
@@ -92,7 +92,6 @@ class HantuLockInEngine:
         return None
 
     def fetch_single_stock_search(self, token, query_code):
-        # ⚡ 시세 조회는 9443 보안 포트로 정밀 타격
         url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
         headers = {
             "content-type": "application/json; charset=utf-8", 
@@ -126,7 +125,6 @@ class HantuLockInEngine:
         pool = []
         rank_map = {}
         
-        # 1단계: 당일 실시간 거래대금 상위 100위 싹 쓸어오기
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
             "content-type": "application/json; charset=utf-8", 
@@ -137,20 +135,19 @@ class HantuLockInEngine:
             "custtype": "P"
         }
         
-        # ⚡ [정석 보정 2단계]: 한투 실전망 필수 전송 공백 파라미터 빈틈없이 매칭 (방화벽 통과 핵심)
         params_vol = {
             "FID_COND_MRKT_DIV_CODE": "J", 
             "FID_COND_SCR_DIV_CODE": "20171",
             "FID_INPUT_ISCD": "0000", 
             "FID_DIV_CLS_CODE": "0", 
-            "FID_SORT_CLS_CODE": "4",       # 거래대금 내림차순 정렬
+            "FID_SORT_CLS_CODE": "4",       
             "FID_BLNG_CLS_CODE": "0",
             "FID_TRGT_CLS_CODE": "00000000",
             "FID_TRGT_EXCL_CLS_CODE": "00000000",
             "FID_INPUT_PRICE_1": "0",
             "FID_INPUT_PRICE_2": "0",
-            "FID_VOL_CNT": "",              # ⚠️ 한투 표준 규격 공백문자 필수 항목
-            "FID_INPUT_DATE_1": ""          # ⚠️ 한투 표준 규격 공백문자 필수 항목
+            "FID_VOL_CNT": "",              
+            "FID_INPUT_DATE_1": ""          
         }
         
         try:
@@ -171,35 +168,45 @@ class HantuLockInEngine:
                     stat = str(item.get("iscd_stat_cls_code", "00")).strip()
                     raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
                     
-                    # 파두 포착을 위해 최소 가격 제한 하한선을 5,000원으로 유지
                     if price < 5000: continue
-                    if ctrt <= 0.0: continue # 마이너스 전면 상쇄
+                    if ctrt <= 0.0: continue 
                     
                     rank_map[t_code] = True
                     pool.append((rank_idx + 1, t_code, name, ctrt, raw_amt, stat))
         except Exception as e:
             st.session_state.net_log = f"❌ 데이터 조회망 패킷 통신 무너짐: {str(e)}"
 
-        # 2단계: 주성과 파두가 순위권 밖에 숨어있을 때를 대비한 강제 락인 가동
         target_watchlist = [("036930", "주성엔지니어링"), ("044010", "파두")]
-        
         for ticker, name in target_watchlist:
             if ticker not in rank_map:
-                time.sleep(0.25) # 초당 호출 제한 안전 가드
+                time.sleep(0.25) 
                 s_res = self.fetch_single_stock_search(token, ticker)
-                if s_res and s_res["ctrt"] > 0.0: # 플러스 상승 중일 때만 화면 송출
+                if s_res and s_res["ctrt"] > 0.0: 
                     pool.append((999, ticker, name, s_res["ctrt"], s_res["amt"], s_res["stat"]))
 
-        st.session_state.net_log = f"🟢 한투 실전망 주성 × 파두 교차 관제 성공! ({current_time_str})"
+        st.session_state.net_log = f"🟢 한투 실전망 주성 × 파두 관제 성공! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
         pool.sort(key=lambda x: x[0])
         return pool
+
+# =====================================================================
+# ⚡ [상시 표출 핵심 수술]: 사용자가 들어오자마자 메모리가 비어있으면 강제로 먼저 긁어옴
+# =====================================================================
+def force_sync_load():
+    engine = HantuLockInEngine()
+    token = engine.get_token()
+    if token:
+        st.session_state.last_pool = engine.fetch_market_pool_by_indices(token)
+
+# 🚀 화면을 처음 열었을 때(last_pool이 텅 비어있을 때) 묻지도 따지지도 않고 20개 대장주 바로 채우기
+if not st.session_state.last_pool:
+    force_sync_load()
 
 # =====================================================================
 # 🖥️ 데이터 제어 버튼 파트
 # =====================================================================
 cc1, cc2 = st.columns([4, 1])
 with cc1:
-    btn_fetch = st.button("🔄 한투 실전망 당일 플러스(+) 상승 주도주 전체 다이렉트 소싱 가동", type="primary", use_container_width=True)
+    btn_fetch = st.button("🔄 한투 실전망 당일 플러스(+) 상승 주도주 전체 즉시 동기화", type="primary", use_container_width=True)
 with cc2:
     btn_clear = st.button("⚠️ 시스템 세션 초기화", type="secondary", use_container_width=True)
 
@@ -211,17 +218,14 @@ if btn_clear:
 
 if btn_fetch:
     st.session_state.last_pool = []
-    with st.spinner("한투 실전망 게이트웨이 개방 중... 실시간 수급 데이터 바인딩 중입니다."):
-        engine = HantuLockInEngine()
-        token = engine.get_token()
-        if token:
-            st.session_state.last_pool = engine.fetch_market_pool_by_indices(token)
-            st.rerun()
+    with st.spinner("한투 실전망 게이트웨이 동기화 중..."):
+        force_sync_load()
+        st.rerun()
 
 # =====================================================================
 # 📊 [상단 구역] 플러스 상승 우량주 전용 종합 수급 표
 # =====================================================================
-st.markdown("### 📊 당일 실시간 상승(+) 주도주 마스터 종합 순위표")
+st.markdown("### 📊 당일 실시간 상승(+) 주도주 마스터 종합 순위표 (상시 관제 모드)")
 
 display_list = []
 if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
@@ -248,7 +252,6 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
                 rank_grade = "⚡ 2단계: B급 (견고한 양봉 흐름)"
                 action_tag = "🟢 수급 확인 완료 / 하단 차트 패널에서 분봉 눌림목 스캘핑 영역 포착"
 
-            # 거래대금 단위 가독성 극대화 포맷 마감
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
             display_list.append({
@@ -270,7 +273,6 @@ selected_name = None
 if not df_final.empty:
     df_final.insert(0, "선택", False)
     
-    # 첫 화면 구동 시 주성엔지니어링이 리스트에 있으면 자동 선택 체크박스 ON 활성화
     for i, r in df_final.iterrows():
         if "주성엔지니어링" in r["종목명"]:
             df_final.loc[i, "선택"] = True
@@ -295,7 +297,7 @@ if not df_final.empty:
         raw_selected_name = df_final.iloc[0]["종목명"]
         selected_name = raw_selected_name.split("]")[-1].strip()
 else:
-    st.info("💡 동기화 대기 중입니다. 위의 버튼을 누르시면 한투 실전망 파이프라인을 열어 주성·파두 및 당일 거래대금 상위 양봉 주도주를 전원 바인딩합니다.")
+    st.info("📥 한투 실전망 라인을 연결하는 중입니다. 잠시만 기다려주십시오.")
 
 st.write("---")
 
@@ -317,5 +319,10 @@ if selected_ticker:
     with tab2:
         naver_day_chart = f"https://ssl.pstatic.net/imgfinance/chart/item/candle/day/{selected_ticker}.png?v={time_seed}"
         st.image(naver_day_chart, caption=f"[{selected_name}] 네이버 실시간 일봉 캔들 추세 지지선", use_container_width=True)
-else:
-    st.info("⬆ 상단 순위 리스트에서 원하시는 종목의 [선택] 체크박스를 켜시면 하단에 네이버 오리지널 차트가 표출됩니다.")
+
+# =====================================================================
+# ⏱️ [장중 상시 자동 관제]: 60초마다 대표님 대신 알아서 새로고침하는 무중단 타이머
+# =====================================================================
+st.caption("⚙️ **자동 감시 시스템 가동 중:** 장중 최신 거래대금 파싱을 위해 60초마다 백그라운드 리프레시를 자동 수행합니다.")
+time.sleep(60)
+st.rerun()
