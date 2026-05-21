@@ -1,233 +1,277 @@
-import requests
-import json
-import pandas as pd
-from datetime import datetime
-import pytz
 import streamlit as st
+import pandas as pd
+import requests
+import time
+import os
+import json
+from datetime import datetime, timezone, timedelta
 
-# ==========================================
-# 1. 스트림릿 페이지 기본 설정 (넓은 화면 모드)
-# ==========================================
-st.set_page_config(page_title="한투 실전망 주도주 레이더", layout="wide")
+# =====================================================================
+# ⚙️ [최우선] Streamlit 설정 및 세션 초기화
+# =====================================================================
+st.set_page_config(page_title="주성 × 파두 락인 마스터 스캐너 Pro", layout="wide")
 
-# 한국 표준시(KST) 타임존 정의
-KST = pytz.timezone('Asia/Seoul')
+APP_KEY = st.secrets.get("HANTU_APP_KEY", "").strip()
+APP_SECRET = st.secrets.get("HANTU_APP_SECRET", "").strip()
 
-# ⚡ [한투 공식 가이드라인 실전 운영망 주소 이원화 고정]
-URL_TOKEN = "https://openapi.koreainvestment.com"            # 🔑 토큰 발급 창구 (포트 없음)
-URL_DATA = "https://openapi.koreainvestment.com:9443"        # 📊 시세 조회 창구 (9443 포트)
+if "engine_cache" not in st.session_state: st.session_state.engine_cache = {}
+if "last_pool" not in st.session_state: st.session_state.last_pool = []
+if "net_log" not in st.session_state: st.session_state.net_log = "🔌 주도주 실시간 파이프라인 대기 중..."
 
-# ==========================================
-# 2. 자격 증명 안전 로드 및 유령 공백 완벽 제거 (Strip)
-# ==========================================
-st.sidebar.header("🔑 한투 실전망 인증 센터")
-st.sidebar.success("🌐 통신 회선: 한국투자증권 실전 운영망 정식 연결")
+KST = timezone(timedelta(hours=9))
+now_kst = datetime.now(tz=KST)
+current_time_str = now_kst.strftime("%H:%M:%S")
 
-# Secrets에 등록된 키를 우선으로 읽되, 앞뒤 눈에 안 보이는 공백을 완벽히 잘라냅니다.
-sec_app_key = st.secrets["APP_KEY"].strip() if "APP_KEY" in st.secrets else ""
-sec_app_secret = st.secrets["APP_SECRET"].strip() if "APP_SECRET" in st.secrets else ""
+TOKEN_FILE = "hantu_token_cache.json"
 
-user_app_key = st.sidebar.text_input("한투 실전 APP KEY", value=sec_app_key, type="password")
-user_app_secret = st.sidebar.text_input("한투 실전 APP SECRET", value=sec_app_secret, type="password")
+st.title("🎯 AI 당일 상승 주도주 실시간 스캐너 (주성엔지니어링 × 파두 고정 포착판)")
+st.warning(f"📡 **실시간 라인 진단 모니터:** {st.session_state.net_log}")
+st.write("---")
 
-APP_KEY = user_app_key.strip() if user_app_key else sec_app_key
-APP_SECRET = user_app_secret.strip() if user_app_secret else sec_app_secret
-
-st.sidebar.markdown("---")
-st.sidebar.header("🤖 텔레그램 수신기")
-TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"].strip() if "TELEGRAM_TOKEN" in st.secrets else ""
-CHAT_ID = st.secrets["CHAT_ID"].strip() if "CHAT_ID" in st.secrets else ""
-
-# ==========================================
-# 3. 세션 상태(Session State) 초기화 (토큰 일회성 저장 관리)
-# ==========================================
-if 'kis_token' not in st.session_state:
-    st.session_state['kis_token'] = None         # 한투 세션인증 토큰 보관함
-if 'sent_stocks' not in st.session_state:
-    st.session_state['sent_stocks'] = set()      # 텔레그램 중복 전송 방지 가드
-if 'stock_display_df' not in st.session_state:
-    st.session_state['stock_display_df'] = pd.DataFrame()
-if 'last_update_time' not in st.session_state:
-    st.session_state['last_update_time'] = "아직 조회되지 않음"
-if 'engine_status' not in st.session_state:
-    st.session_state['engine_status'] = "🔴 한투 API 인증 대기 중"
-
-# ==========================================
-# 4. 핵심 백엔드 기능 함수들 (한투 정석 프로토콜 구현)
-# ==========================================
-def get_access_token():
-    """OAuth2.0 실전 운영망 토큰 발급 (정석 헤더 및 바디 매칭)"""
-    if not APP_KEY or not APP_SECRET:
-        st.session_state['engine_status'] = "❌ 실전 키값 누락 (사이드바 혹은 Secrets를 확인해 주세요)"
-        return None
+# =====================================================================
+# 🏹 주성과 파두를 절대로 놓치지 않는 특화형 거래대금 소싱 엔진
+# =====================================================================
+class HantuLockInEngine:
+    def __init__(self):
+        self.session = requests.Session()
         
-    headers = {"content-type": "application/json"}
-    body = {
-        "grant_type": "client_credentials", 
-        "appkey": APP_KEY, 
-        "secretkey": APP_SECRET
-    }
-    try:
-        # 포트가 없는 공식 토큰 주소로 정밀 타격
-        res = requests.post(f"{URL_TOKEN}/oauth2/tokenP", headers=headers, json=body, timeout=5)
-        if res.status_code == 200:
-            token = res.json().get("access_token")
-            st.session_state['kis_token'] = token
-            return token
-        else:
-            err_msg = res.json().get('error_description', 'AppKey 조합 혹은 계정 권한 불일치')
-            st.session_state['engine_status'] = f"❌ 인증 거절 (사유: {err_msg})"
-    except Exception as e:
-        st.session_state['engine_status'] = f"💥 토큰 발급 단계 네트워크 장애: {str(e)}"
-    return None
+    def get_token(self):
+        if not APP_KEY or not APP_SECRET:
+            st.session_state.net_log = "❌ Secrets 키 설정 오류! 앱 키가 비어있습니다."
+            return None
 
-def send_telegram(text):
-    """동기식 텔레그램 메시지 푸시 발송"""
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=3)
-    except:
-        pass
+        now_utc = datetime.now(tz=timezone.utc)
 
-def run_radar_screening():
-    """한국투자증권 실전망 다이렉트 연동 및 주도주 스크리닝 엔진"""
-    try:
-        # 토큰이 없거나 만료되었을 때만 딱 1번 새로 받아와서 락을 겁니다.
-        if not st.session_state['kis_token']:
-            token = get_access_token()
-            if not token:
-                return
-        else:
-            token = st.session_state['kis_token']
+        if os.path.exists(TOKEN_FILE):
+            try:
+                with open(TOKEN_FILE, "r") as f:
+                    cache = json.load(f)
+                expire_time = datetime.fromisoformat(cache["expires_at"])
+                if expire_time > now_utc and cache.get("token"):
+                    return cache["token"]
+            except:
+                pass
 
-        # ⚡ 데이터 조회는 포트번호가 붙은 실전망 공식 엔드포인트 타격
-        api_url = f"{URL_DATA}/uapi/domestic-stock/v1/quotations/volume-rank"
-        
-        # 🛡️ 한투 실전망 표준 규격 거래량 순위 헤더 셋업
-        headers = {
-            "content-type": "application/json; charset=utf-8",
-            "authorization": f"Bearer {token}",
-            "appkey": APP_KEY,
-            "secretkey": APP_SECRET,
-            "tr_id": "FHPST01710000",       # 거래량 순위 조회 공식 TR ID
-            "custtype": "P"                  # P: 개인 실전망 고정
-        }
-        
-        # 🛡️ 공식 명세서 상의 빈칸 필수 전송 파라미터 매칭
-        params = {
-            "FID_COND_MRKT_DIV_CODE": "J",    # J: 주식 전체 (코스피 + 코스닥 통합)
-            "FID_COND_SCR_DIV_CODE": "20171", # 화면 분류 코드 고정
-            "FID_INPUT_ISCD": "0000",         # 0000: 전체 시장 대상
-            "FID_DIV_CLS_CODE": "0",          # 0: 전체 순위
-            "FID_BLNG_CLS_CODE": "0",         
-            "FID_TRGT_CLS_CODE": "00000000",  
-            "FID_TRGT_EXCL_CLS_CODE": "00000000",
-            "FID_INPUT_PRICE_1": "0",
-            "FID_INPUT_PRICE_2": "0",
-            "FID_VOL_CNT": "",                # ⚠️ 필수: 공백 문자열 전달
-            "FID_INPUT_DATE_1": ""            # ⚠️ 필수: 공백 문자열 전달
-        }
-        
-        res = requests.get(api_url, headers=headers, params=params, timeout=5)
-        
-        if res.status_code == 200:
-            res_json = res.json()
-            output = res_json.get('output', [])
-            server_msg = res_json.get('msg1', '데이터 수집 완료').strip()
-            
-            if not output:
-                st.session_state['engine_status'] = f"⚠️ 한투 응답 성공했으나 비어있음 (사유: {server_msg})"
-                return
-                
-            df_raw = pd.DataFrame(output)
-            
-            # 수치 데이터 안전 형변환 공정
-            df_raw['stck_prpr'] = pd.to_numeric(df_raw['stck_prpr'], errors='coerce').fillna(0).astype(int)
-            df_raw['acml_tr_pbmn'] = pd.to_numeric(df_raw['acml_tr_pbmn'], errors='coerce').fillna(0).astype(float)
-            df_raw['prdy_ctrt'] = pd.to_numeric(df_raw['prdy_ctrt'], errors='coerce').fillna(0).astype(float)
-            df_raw['money_billion'] = (df_raw['acml_tr_pbmn'] // 100000000).astype(int) # 억 원 단위 변환
-            
-            # 🎯 [대표님 오리지널 주도주 커트라인]: 당일 거래대금 100억 이상 & 상승률 +1.5% 이상 대장주 스크리닝
-            filtered_df = df_raw[(df_raw['money_billion'] >= 10) & (df_raw['prdy_ctrt'] >= 1.5)]
-            
-            # 만약 장세 소강 상태로 종목이 너무 적으면 거래대금 상위 20개 자동 인계 강제 표출
-            if len(filtered_df) < 10:
-                final_target = df_raw.sort_values(by='money_billion', ascending=False).head(20)
+        url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
+        try:
+            r = self.session.post(url, json={"grant_type": "client_credentials", "appkey": APP_KEY, "appsecret": APP_SECRET}, timeout=4.0)
+            if r.status_code == 200:
+                data = r.json()
+                token = data.get("access_token")
+                if token:
+                    expires_at = (datetime.now(tz=timezone.utc) + timedelta(hours=5)).isoformat()
+                    with open(TOKEN_FILE, "w") as f:
+                        json.dump({"token": token, "expires_at": expires_at}, f)
+                    return token
             else:
-                final_target = filtered_df.sort_values(by='money_billion', ascending=False)
-                
-            processed_rows = []
-            detect_time = datetime.now(KST).strftime('%H:%M:%S')
-            
-            for _, row in final_target.iterrows():
-                raw_code = row['mkte_ticker'].strip() if 'mkte_ticker' in row else row['stck_shrn_iscd'].strip()
-                code = "".join(filter(str.isdigit, raw_code))[-6:] # 순정 6자리 종목코드 발라내기
-                
-                name = row['hts_kor_isnm'].strip()
-                rate = row['prdy_ctrt']
-                price = row['stck_prpr']
-                money = row['money_billion']
-                
-                # 중복 전송 제어 가드 작동 후 텔레그램 실시간 신호 푸시
-                if code not in st.session_state['sent_stocks']:
-                    msg = (
-                        f"🚀 [한투 실전망 - 주도주 포착]\n\n"
-                        f"📌 종목명: {name} ({code})\n"
-                        f"📈 현재가: {price:,}원\n"
-                        f"⚡ 당일 등락률: +{rate}%\n"
-                        f"💰 현재 거래대금: {money:,}억 돌파!"
-                    )
-                    send_telegram(msg)
-                    st.session_state['sent_stocks'].add(code)
+                st.session_state.net_log = f"❌ 토큰 발급 실패 ({r.status_code})"
+        except Exception as e:
+            st.session_state.net_log = f"❌ 인증 연결 실패 -> {str(e)}"
+        return None
+
+    def fetch_single_stock_search(self, token, query_code):
+        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
+        headers = {
+            "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
+            "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01010000", "custtype": "P"
+        }
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": query_code}
+        try:
+            r = self.session.get(url, headers=headers, params=params, timeout=2.0)
+            if r.status_code == 200:
+                res_json = r.json()
+                out = res_json.get("output") if res_json.get("output") else res_json.get("output1")
+                if out:
+                    p_str = "".join(filter(str.isdigit, str(out.get("stck_prpr", "0"))))
+                    price = int(p_str) if p_str else 0
                     
-                processed_rows.append({
-                    "포착시간": detect_time,
-                    "종목코드": code,
-                    "종목명": name,
-                    "현재가(원)": f"{price:,}",
-                    "전일대비 등락률": f"+{rate}%" if rate > 0 else f"{rate}%",
-                    "당일 거래대금(억)": money
-                })
-                
-            st.session_state['stock_display_df'] = pd.DataFrame(processed_rows)
-            st.session_state['last_update_time'] = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
-            st.session_state['engine_status'] = f"🟢 한투 실전 통신 성공 ({server_msg})"
-        else:
-            st.session_state['engine_status'] = f"❌ 한투 통신 거부 (에러 코드: {res.status_code})"
+                    ctrt = float(out.get("prdy_ctrt", 0.0))
+                    stat = str(out.get("iscd_stat_cls_code", "00")).strip()
+                    
+                    v_str = "".join(filter(str.isdigit, str(out.get("acml_tr_pbmn", "0"))))
+                    raw_amt = float(v_str) if v_str else 0.0
+                    
+                    return {"price": price, "ctrt": ctrt, "amt": raw_amt, "stat": stat}
+        except: pass
+        return None
+
+    def fetch_market_pool_by_indices(self, token):
+        pool = []
+        rank_map = {}
+        
+        # 1단계: 당일 실시간 거래대금 상위 100위 싹 쓸어오기
+        url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
+        headers_vol = {
+            "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
+            "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01710000", "custtype": "P"
+        }
+        params_vol = {
+            "FID_COND_MRKT_DIV_CODE": "J", "FID_COND_SCR_DIV_CODE": "20171",
+            "FID_INPUT_ISCD": "0000", "FID_DIV_CLS_CODE": "0", "FID_SORT_CLS_CODE": "4" # 거래대금 정렬 고정
+        }
+        
+        try:
+            r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=4.0)
+            if r_vol.status_code == 200:
+                vol_output = r_vol.json().get("output", [])
+                for rank_idx, item in enumerate(vol_output):
+                    t_code = str(item.get("mksc_shrn_iscd", "")).strip()[-6:]
+                    if not t_code.isdigit(): continue
+                    
+                    name = str(item.get("hts_kor_isnm", item.get("data_name", ""))).strip()
+                    if any(k in name for k in ["스팩", "리츠", "인버스", "레버리지", "KODEX", "TIGER"]): continue
+                    
+                    p_str_raw = "".join(filter(str.isdigit, str(item.get("stck_prpr", "0"))))
+                    price = int(p_str_raw) if p_str_raw else 0
+                    
+                    ctrt = float(str(item.get("prdy_ctrt", "0.0")).strip())
+                    stat = str(item.get("iscd_stat_cls_code", "00")).strip()
+                    raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
+                    
+                    # 🛠️ [필터 조정 1단계]: 파두 포착을 위해 최소 가격 제한 하한선을 5,000원으로 조정!
+                    if price < 5000: continue
+                    if ctrt <= 0.0: continue # 마이너스 전면 파쇄
+                    
+                    rank_map[t_code] = True
+                    pool.append((rank_idx + 1, t_code, name, ctrt, raw_amt, stat))
+        except: pass
+
+        # 2단계: 🛠️ [필터 조정 2단계]: 주성과 파두가 순위권 밖에 숨어있을 때를 대비한 강제 락인 가동
+        target_watchlist = [("036930", "주성엔지니어링"), ("044010", "파두")]
+        
+        for ticker, name in target_watchlist:
+            if ticker not in rank_map:
+                time.sleep(0.25) # 초당 호출 제한 안전 가드
+                s_res = self.fetch_single_stock_search(token, ticker)
+                if s_res and s_res["ctrt"] > 0.0: # 플러스 상승 중일 때만 화면 송출
+                    pool.append((999, ticker, name, s_res["ctrt"], s_res["amt"], s_res["stat"]))
+
+        st.session_state.net_log = f"🟢 주성 × 파두 교차 추적 엔진 가동 성공! ({current_time_str})"
+        pool.sort(key=lambda x: x[0])
+        return pool
+
+# =====================================================================
+# 🖥️ 데이터 제어 버튼 파트
+# =====================================================================
+cc1, cc2 = st.columns([4, 1])
+with cc1:
+    btn_fetch = st.button("🔄 실시간 당일 플러스(+) 상승 주도주 전체 다이렉트 소싱 가동", type="primary", use_container_width=True)
+with cc2:
+    btn_clear = st.button("⚠️ 시스템 세션 초기화", type="secondary", use_container_width=True)
+
+if btn_clear:
+    if os.path.exists(TOKEN_FILE): os.remove(TOKEN_FILE)
+    st.session_state.last_pool = []
+    st.session_state.net_log = "♻️ 캐시 메모리 청소 완료."
+    st.rerun()
+
+if btn_fetch:
+    st.session_state.last_pool = []
+    with st.spinner("파두 수집 필터 하한선 5천 원 하향 완료! 실시간 수급 대장주 전체 바인딩 중..."):
+        engine = HantuLockInEngine()
+        token = engine.get_token()
+        if token:
+            st.session_state.last_pool = engine.fetch_market_pool_by_indices(token)
+            st.rerun()
+
+# =====================================================================
+# 📊 [상단 구역] 플러스 상승 우량주 전용 종합 수급 표
+# =====================================================================
+st.markdown("### 📊 당일 실시간 상승(+) 주도주 마스터 종합 순위표")
+
+display_list = []
+if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
+    for row in st.session_state.last_pool:
+        if isinstance(row, tuple) and len(row) == 6:
+            raw_rank, t, n, ctrt, amt, stat = row
             
-    except Exception as e:
-        st.session_state['engine_status'] = f"💥 시스템 연산 예외 장애 발생: {str(e)}"
+            stat_prefix = ""
+            if stat in ["58", "59"]: stat_prefix = "[🚨VI발동] "
+            elif stat == "52": stat_prefix = "[⚠️유의] "
+            elif stat == "51": stat_prefix = "[❌관리] "
+            elif stat == "57": stat_prefix = "[🔥경고] "
 
-# ==========================================
-# 5. 대시보드 레이아웃 UI 구역 (정석 컴팩트 디자인)
-# ==========================================
-st.title("⚡ 한국투자증권 실전망 직통 장중 주도주 레이더")
-st.caption("우회 창구를 전부 폐쇄하고 오직 한투 정식 API 명세서 규격 프로토콜만 다이렉트로 관통시킨 정석 최종 마스터본")
+            if "주성엔지니어링" in n or "파두" in n:
+                display_name = f"💎[핵심분석-락인] {stat_prefix}{n}"
+                rank_grade = "🔥 1단계: A급 (지수 주도주)"
+                action_tag = "🎯 대표님 전용 고정 포착 타깃 종목 (하단 분봉 차트 연동 완료)"
+            elif raw_rank <= 30 and ctrt >= 5.0:
+                display_name = f"🔥[우량주도-최강] {stat_prefix}{n}"
+                rank_grade = "🔥 1단계: A급 (시세 분출)"
+                action_tag = "🚀 대한민국 시장 자금을 싹 쓸어담는 핵심 대장 (최우선 공략)"
+            else:
+                display_name = f"{stat_prefix}{n}"
+                rank_grade = "⚡ 2단계: B급 (견고한 양봉 흐름)"
+                action_tag = "🟢 수급 확인 완료 / 하단 차트 패널에서 분봉 눌림목 스캘핑 영역 포착"
 
-# 수동 즉시 호출 및 새로고침 버튼 배치
-if st.button("🔄 한투 실전망 실시간 주도주 데이터 즉시 동기화", use_container_width=True):
-    run_radar_screening()
+            # 거래대금 단위 가독성 극대화 포맷 마감
+            amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
-# 관제 메트릭 스코어보드 배치
-col_m1, col_m2, col_m3 = st.columns(3)
-with col_m1:
-    st.metric(label="📊 최근 실전망 동기화 완료 시간 (KST)", value=st.session_state['last_update_time'])
-with col_m2:
-    st.metric(label="🎯 현재 레이더 감지 종목 수", value=f"{len(st.session_state['stock_display_df'])} 개")
-with col_m3:
-    st.metric(label="🛡️ 실전 엔진 가동 현황", value=st.session_state['engine_status'])
+            display_list.append({
+                "당일 대금 순위": f"{raw_rank}위" if raw_rank <= 100 else "100위권 밖",
+                "종목코드": t,
+                "종목명": display_name,
+                "수급 등급 분류": rank_grade,
+                "현재가": f"⬇️ 하단 실시간 오리지널 차트에서 정품 가격 즉시 연동",
+                "등락률": f"{ctrt:+.2f}%",
+                "당일 누적대금": amt_display,
+                "실전 행동 지침": action_tag
+            })
 
-st.markdown("---")
+df_final = pd.DataFrame(display_list)
 
-# 실시간 모니터링 데이터 표 렌더링 구역
-if not st.session_state['stock_display_df'].empty:
-    st.dataframe(st.session_state['stock_display_df'], use_container_width=True, hide_index=True)
-else:
-    # 켜자마자 최초 1회 묻지도 따지지도 않고 직통 강제 호출
-    run_radar_screening()
-    if not st.session_state['stock_display_df'].empty:
-        st.rerun()
+selected_ticker = None
+selected_name = None
+
+if not df_final.empty:
+    df_final.insert(0, "선택", False)
+    
+    # 첫 화면 구동 시 주성엔지니어링이 리스트에 있으면 자동 선택 체크박스 ON 활성화
+    for i, r in df_final.iterrows():
+        if "주성엔지니어링" in r["종목명"]:
+            df_final.loc[i, "선택"] = True
+            break
+
+    edited_df = st.data_editor(
+        df_final,
+        use_container_width=True,
+        hide_index=True,
+        column_config={"선택": st.column_config.CheckboxColumn(required=True)},
+        disabled=["당일 대금 순위", "종목코드", "종목명", "수급 등급 분류", "현재가", "등락률", "당일 누적대금", "실전 행동 지침"],
+        height=450
+    )
+    
+    selected_rows = edited_df[edited_df["선택"] == True]
+    if not selected_rows.empty:
+        selected_ticker = selected_rows.iloc[0]["종목코드"]
+        raw_selected_name = selected_rows.iloc[0]["종목명"]
+        selected_name = raw_selected_name.split("]")[-1].strip()
     else:
-        st.warning("📥 상단의 [🔄 한투 실전망 실시간 주도주 데이터 즉시 동기화] 버튼을 툭 누르시면 꼬임 없는 순정 통신망을 열어 실제 실시간 주도주들을 즉각 로드해옵니다.")
+        selected_ticker = df_final.iloc[0]["종목코드"]
+        raw_selected_name = df_final.iloc[0]["종목명"]
+        selected_name = raw_selected_name.split("]")[-1].strip()
+else:
+    st.info("💡 동기화 대기 중입니다. 위의 버튼을 누르시면 주성·파두를 포함하여 오늘 돈이 몰리며 상승 중인 우량 주도주 수십 개가 전원 노출됩니다.")
+
+st.write("---")
+
+# =====================================================================
+# 📈 [하단 구역] 네이버 실시간 차트 스튜디오
+# =====================================================================
+st.markdown("### 📈 네이버 페이 증권 실시간 오리지널 차트 패널")
+
+if selected_ticker:
+    st.success(f"🔍 현재 분석 동기화 차트: **{selected_name} ({selected_ticker})**")
+    
+    tab1, tab2 = st.tabs(["⚡ 단타 필수: 실시간 당일 분봉 차트", "📅 추세 확인: 일봉 차트"])
+    time_seed = int(time.time())
+    
+    with tab1:
+        naver_minute_chart = f"https://ssl.pstatic.net/imgfinance/chart/item/area/day/{selected_ticker}.png?v={time_seed}"
+        st.image(naver_minute_chart, caption=f"[{selected_name}] 네이버 실시간 분봉 및 당일 세력 거래량 분석", use_container_width=True)
+        
+    with tab2:
+        naver_day_chart = f"https://ssl.pstatic.net/imgfinance/chart/item/candle/day/{selected_ticker}.png?v={time_seed}"
+        st.image(naver_day_chart, caption=f"[{selected_name}] 네이버 실시간 일봉 캔들 추세 지지선", use_container_width=True)
+else:
+    st.info("⬆ 상단 순위 리스트에서 원하시는 종목의 [선택] 체크박스를 켜시면 하단에 네이버 오리지널 차트가 표출됩니다.")
