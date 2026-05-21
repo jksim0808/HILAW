@@ -225,17 +225,15 @@ def run_monitoring():
         
         # 문자열로 반환되는 KIS 수치들을 정밀 숫자형으로 캐스팅
         df['stck_prpr'] = pd.to_numeric(df['stck_prpr'], errors='coerce').fillna(0).astype(int)
-        df['stck_hgpr'] = pd.to_numeric(df['stck_hgpr'], errors='coerce').fillna(0).astype(int)
-        df['stck_lwpr'] = pd.to_numeric(df['stck_lwpr'], errors='coerce').fillna(0).astype(int)
+        
+        # [⭐ 초정밀 수정] stck_hgpr / lwpr 대신 장대 등락률 필드인 prdy_ctrt를 변동률로 직접 채택하여 에러를 원천 제거합니다!
+        df['volatility'] = pd.to_numeric(df['prdy_ctrt'], errors='coerce').fillna(0).round(2)
         
         # acml_tr_pbmn (누적거래대금): "원" 단위를 1억 원 단위로 정량 스케일링 보정
         df['acml_tr_pbmn'] = pd.to_numeric(df['acml_tr_pbmn'], errors='coerce').fillna(0).astype(float) / 100000000
         
-        # 당일 고저 변동폭 산출
-        df['volatility'] = ((df['stck_hgpr'] - df['stck_lwpr']) / df['stck_prpr'] * 100).round(2)
-        
         # 💡 스크리닝 필터 기준: 거래대금 100억 원 이상 & 고저 변동폭 3% 이상
-        target_stocks = df[(df['acml_tr_pbmn'] >= 100) & (df['volatility'] >= 3.0)]
+        target_stocks = df[(df['acml_tr_pbmn'] >= 100) & (df['volatility'].abs() >= 3.0)]
         
         # 거래대금 최상위 기조로 정렬
         target_stocks = target_stocks.sort_values(by='acml_tr_pbmn', ascending=False)
