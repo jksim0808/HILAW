@@ -108,6 +108,14 @@ class HantuPureSpeedEngine:
             r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=5.0)
             if r_vol.status_code == 200:
                 vol_output = r_vol.json().get("output", [])
+                
+                # 🏛️ [대형주 상시 생존 마스터 코드]: 시총 최상위 핵심 대장주 코드 모음
+                mega_cap_codes = [
+                    "005930", "000660", "005380", "000270", "005490", 
+                    "035420", "035720", "068270", "207940", "051910", 
+                    "006400", "012450", "011200", "000150", "373220"
+                ]
+                
                 for rank_idx, item in enumerate(vol_output):
                     t_code = str(item.get("mksc_shrn_iscd", "")).strip()[-6:]
                     if not t_code.isdigit(): continue
@@ -122,11 +130,12 @@ class HantuPureSpeedEngine:
                     stat = str(item.get("iscd_stat_cls_code", "00")).strip()
                     raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
                     
-                    # ⚡ [하이패스 핵심 수술]: SK하이닉스와 삼성전자는 마이너스 주가여도 무조건 패스 (컷 탈락 면제)
-                    is_super_stock = ("SK하이닉스" in name or "삼성전자" in name)
+                    # ⚡ [핵심 연산 보정]: 해당 종목이 대한민국 대표 대형주인지 필터 검사
+                    is_mega_cap = (t_code in mega_cap_codes or "하이닉스" in name or "삼성전자" in name or "현대차" in name)
                     
-                    if price < 5000 and not is_super_stock: continue
-                    if ctrt <= 0.0 and not is_super_stock: continue 
+                    # 일반 종목은 가격과 등락률 컷오프를 적용하지만, 대형주(is_mega_cap)는 마이너스 상태여도 패스 트랙 작동!
+                    if price < 5000 and not is_mega_cap: continue
+                    if ctrt <= 0.0 and not is_mega_cap: continue 
                     
                     pool.append((rank_idx + 1, t_code, name, ctrt, raw_amt, stat))
         except Exception as e:
@@ -153,7 +162,7 @@ if not st.session_state.last_pool:
 # =====================================================================
 cc1, cc2 = st.columns([4, 1])
 with cc1:
-    btn_fetch = st.button("🔄 한투 실전망 당일 플러스(+) 상승 주도주 전체 즉시 동기화", type="primary", use_container_width=True)
+    btn_fetch = st.button("🔄 한투 실전망 당일 주도주 전체 즉시 동기화", type="primary", use_container_width=True)
 with cc2:
     btn_clear = st.button("⚠️ 시스템 세션 초기화", type="secondary", use_container_width=True)
 
@@ -172,7 +181,7 @@ if btn_fetch:
 # =====================================================================
 # 📊 [상단 구역] 종합 수급 표
 # =====================================================================
-st.markdown("### 📊 당일 실시간 상승(+) 주도주 마스터 종합 순위표 (순수 수급 관제 모드)")
+st.markdown("### 📊 당일 실시간 주도주 마스터 종합 순위표 (대형주 매칭 상시 관제 모드)")
 
 display_list = []
 if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
@@ -186,15 +195,18 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             elif stat == "51": stat_prefix = "[❌관리] "
             elif stat == "57": stat_prefix = "[🔥경고] "
 
-            # ⚡ 문구 최적화 및 등락률 부호 조건 스케일 보정
-            if raw_rank <= 20 and ctrt >= 4.0:
+            # ⚡ 텍스트 및 주소 식별자 이중 대조 가드 가동
+            mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
+            is_mega_cap = (t in mega_cap_codes or "하이닉스" in n or "삼성전자" in n or "현대차" in n)
+
+            if raw_rank <= 20 and ctrt >= 4.0 and not is_mega_cap:
                 display_name = f"🔥[우량주도-최강] {stat_prefix}{n}"
                 rank_grade = "🔥 1단계: A급 (시세 강력 분출)"
                 action_tag = "🚀 대한민국 시장 자금을 가장 빠르게 빨아들이는 핵심 대장 (최우선 타깃)"
-            elif "SK하이닉스" in n or "삼성전자" in n:
+            elif is_mega_cap:
                 display_name = f"🏛️[시장지수-대장] {stat_prefix}{n}"
                 rank_grade = "📊 지수 연동형 메가크라운 대형주"
-                action_tag = "⚡ 대한민국 증시의 든든한 버팀목 (지수 방향성 및 대형 호가 단타 추적용)"
+                action_tag = f"⚡ 대한민국 증시 지수 상위 대장주 (장중 시황 연동 및 호가판 분석용)"
             else:
                 display_name = f"{stat_prefix}{n}"
                 rank_grade = "⚡ 2단계: B급 (견고한 거래량 쏠림)"
