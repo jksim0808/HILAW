@@ -109,7 +109,6 @@ class HantuPureSpeedEngine:
             if r_vol.status_code == 200:
                 vol_output = r_vol.json().get("output", [])
                 
-                # 🏛️ [대형주 상시 생존 마스터 코드]: 시총 최상위 핵심 대장주 코드 모음
                 mega_cap_codes = [
                     "005930", "000660", "005380", "000270", "005490", 
                     "035420", "035720", "068270", "207940", "051910", 
@@ -123,6 +122,7 @@ class HantuPureSpeedEngine:
                     name = str(item.get("hts_kor_isnm", item.get("data_name", ""))).strip()
                     if any(k in name for k in ["스팩", "리츠", "인버스", "레버리지", "KODEX", "TIGER"]): continue
                     
+                    # 🔑 [현재가 정밀 추출] 한투 원본 값에서 순수 숫자만 발라내 정수형 변환
                     p_str_raw = "".join(filter(str.isdigit, str(item.get("stck_prpr", "0"))))
                     price = int(p_str_raw) if p_str_raw else 0
                     
@@ -130,14 +130,13 @@ class HantuPureSpeedEngine:
                     stat = str(item.get("iscd_stat_cls_code", "00")).strip()
                     raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
                     
-                    # ⚡ [핵심 연산 보정]: 해당 종목이 대한민국 대표 대형주인지 필터 검사
                     is_mega_cap = (t_code in mega_cap_codes or "하이닉스" in name or "삼성전자" in name or "현대차" in name)
                     
-                    # 일반 종목은 가격과 등락률 컷오프를 적용하지만, 대형주(is_mega_cap)는 마이너스 상태여도 패스 트랙 작동!
                     if price < 5000 and not is_mega_cap: continue
                     if ctrt <= 0.0 and not is_mega_cap: continue 
                     
-                    pool.append((rank_idx + 1, t_code, name, ctrt, raw_amt, stat))
+                    # ⚡ 튜플에 정확히 7개 인자(price 포함) 채워서 데이터 풀 생성
+                    pool.append((rank_idx + 1, t_code, name, price, ctrt, raw_amt, stat))
         except Exception as e:
             st.session_state.net_log = f"❌ 데이터 조회망 패킷 통신 무너짐: {str(e)}"
 
@@ -179,15 +178,15 @@ if btn_fetch:
         st.rerun()
 
 # =====================================================================
-# 📊 [상단 구역] 종합 수급 표
+# 📊 [상단 구역] 종합 수급 표 (동기화 블록 정밀 결속 수술)
 # =====================================================================
 st.markdown("### 📊 당일 실시간 주도주 마스터 종합 순위표 (대형주 매칭 상시 관제 모드)")
 
 display_list = []
 if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
     for row in st.session_state.last_pool:
-        if isinstance(row, tuple) and len(row) == 6:
-            raw_rank, t, n, ctrt, amt, stat = row
+        if isinstance(row, tuple) and len(row) == 7: # 7개 인자 구조 동기화 검증
+            raw_rank, t, n, price, ctrt, amt, stat = row
             
             stat_prefix = ""
             if stat in ["58", "59"]: stat_prefix = "[🚨VI발동] "
@@ -195,7 +194,6 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             elif stat == "51": stat_prefix = "[❌관리] "
             elif stat == "57": stat_prefix = "[🔥경고] "
 
-            # ⚡ 텍스트 및 주소 식별자 이중 대조 가드 가동
             mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
             is_mega_cap = (t in mega_cap_codes or "하이닉스" in n or "삼성전자" in n or "현대차" in n)
 
@@ -214,12 +212,14 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
 
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
+            # 🛠️ [수술 완료] 표를 빌드할 때 '현재가' 데이터에 이전 안내 문구를 흔적도 없이 밀어버리고 
+            # 한투에서 실시간으로 긁어온 순정 숫자 주가 변수(price)를 강제로 가공 연결(f"{price:,}원")
             display_list.append({
                 "당일 대금 순위": f"{raw_rank}위",
                 "종목코드": t,
                 "종목명": display_name,
                 "수급 등급 분류": rank_grade,
-                "현재가": f"⬇️ 하단 실시간 오리지널 차트에서 정품 가격 즉시 연동",
+                "현재가": f"{price:,}원", 
                 "등락률": f"{ctrt:+.2f}%" if ctrt > 0 else f"{ctrt:.2f}%",
                 "당일 누적대금": amt_display,
                 "실전 행동 지침": action_tag
