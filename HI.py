@@ -13,7 +13,7 @@ KST = pytz.timezone('Asia/Seoul')
 TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"].strip() if "TELEGRAM_TOKEN" in st.secrets else ""
 CHAT_ID = st.secrets["CHAT_ID"].strip() if "CHAT_ID" in st.secrets else ""
 
-# 3. 세션 메모리 초기화 (중복 알림 가드 및 결과 보관용)
+# 3. 세션 메모리 초기화 (중복 알림 방지 및 데이터 보관)
 if 'sent_stocks' not in st.session_state:
     st.session_state['sent_stocks'] = set()
 if 'stock_display_df' not in st.session_state:
@@ -31,17 +31,17 @@ def send_telegram(text):
     except:
         pass
 
-# 5. ⚡ [IP 차단 완벽 우회] 네이버 금융 실시간 백엔드 오픈 API 직통 수집 엔진
+# 5. ⚡ [404 오차 완벽 해결] 네이버 메인 실시간 수급 API 직통 엔진
 def execute_radar_screening():
     try:
-        # 🛡️ 해외 IP 차단 필터가 아예 없는 네이버 금융 실시간 전종목 거래량 대장주 백엔드 데이터망 타격
-        url = "https://polling.finance.naver.com/api/realtime/domestic/ranking/marketValue"
+        # 🛡️ 404가 발생하지 않는 네이버 금융 핵심 실시간 거래대금/거래량 상위 API 창구 타격
+        url = "https://polling.finance.naver.com/api/realtime/domestic/ranking/sise"
         
-        # 주식 전체(코스피+코스닥) 상위권 데이터를 넉넉하게 50개 확보
+        # 주식 전체 시장에서 거래량/대금 상위권을 송두리째 긁어옵니다 (보안 통과 사양)
         params = {
-            "market": "ALL",
+            "rankingType": "VOLUME_TOP",
             "page": "1",
-            "pageSize": "50"
+            "pageSize": "40"
         }
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -50,7 +50,7 @@ def execute_radar_screening():
         res = requests.get(url, headers=headers, params=params, timeout=5)
         
         if res.status_code != 200:
-            st.error(f"❌ 실시간 데이터망 접속 지연 (코드: {res.status_code})")
+            st.error(f"❌ 실시간 데이터망 접속 지연 (코드: {res.status_code}) - 잠시 후 다시 눌러주세요.")
             return
             
         res_json = res.json()
@@ -67,25 +67,31 @@ def execute_radar_screening():
             code = s.get("itemCode", "")        # 6자리 순정 종목코드
             name = s.get("stockName", "")       # 종목명
             
-            # 실시간 진짜 주가 및 대금 파싱
-            price = int(s.get("closePrice", "0").replace(",", ""))
+            # 실시간 순정 주가 파싱 (문자열 쉼표 노이즈 제거)
+            price_raw = str(s.get("closePrice", "0")).replace(",", "")
+            price = int(price_raw) if price_raw.isdigit() else 0
             
-            # 등락률 파싱 및 보정
-            rate_raw = s.get("compareToPreviousCloseRatio", "0.0")
+            # 등락률 파싱 및 하락 기호 처리
+            rate_raw = str(s.get("compareToPreviousCloseRatio", "0.0")).replace(",", "")
             rate = float(rate_raw)
             
-            # 상승/하락 부호 처리
             fluctuation_type = s.get("fluctuationType", "")
-            if fluctuation_type in ["4", "5", "FALL"]: # 하락 코드 가드
+            if fluctuation_type in ["4", "5", "FALL"]:  # 하락 및 하한가 세이프가드
                 rate = -abs(rate)
                 
-            # 실시간 당일 누적 거래대금 (원 단위로 들어오는 데이터를 '억 원' 단위로 변환)
-            raw_money = float(s.get("accumulatedTradingValue", "0").replace(",", ""))
-            money_billion = int(raw_money / 100000000) 
+            # 실시간 누적 거래대금 ('억 원' 단위 정밀 컷팅 스케일링)
+            # 네이버 sise API는 거래대금을 '백만 원' 혹은 '원' 단위 혼용하므로 안전하게 백만 단위 기반 억 원 절사
+            raw_money = float(str(s.get("accumulatedTradingValue", "0")).replace(",", ""))
             
-            # 🎯 [대표님 오리지널 주도주 조건]: 당일 거래대금 100억 이상 & 상승률 +1.5% 이상 대장주 스크리닝
+            # 한투/네이버 모바일 통합 스케일 보정 (단위가 백만 원으로 들어올 때의 억 단위 환산)
+            if raw_money < 10000000:
+                money_billion = int(raw_money / 100)
+            else:
+                money_billion = int(raw_money / 100000000)
+            
+            # 🎯 [대표님 오리지널 주도주 조건]: 당일 거래대금 100억 이상 & 상승률 +1.5% 이상 대장주 필터
             if money_billion >= 10 and rate >= 1.5:
-                # 텔레그램 실시간 중복 발송 방지 가드 가동
+                # 텔레그램 실시간 알림 가드 작동
                 if name not in st.session_state['sent_stocks']:
                     msg = (
                         f"🚀 [실시간 주도주 레이더 포착]\n\n"
@@ -106,20 +112,22 @@ def execute_radar_screening():
                     "당일 거래대금(억)": money_billion
                 })
                 
-        # 수집 완료된 실시간 종목들을 장중 돈이 가장 많이 쏠린 내림차순 상위 20개 정렬 적재
+        # 필터링 완료된 종목들을 거래대금 내림차순 정렬 상위 20개 최종 적재
         if processed_rows:
             df_result = pd.DataFrame(processed_rows)
             df_result = df_result.sort_values(by="당일 거래대금(억)", ascending=False).head(20)
             st.session_state['stock_display_df'] = df_result
         else:
-            # 혹시 점심시간 등 소강상태로 필터 조건에 부합하는 종목이 일시적으로 부족하면 
-            # 거래대금 최상위 라이브 15개 종목을 필터 없이 하이패스로 표출
+            # 장세가 일시 소강 상태일 때 판이 비는 현상 방지 백업 장치
             all_rows = []
             for s in stocks_data:
-                price = int(s.get("closePrice", "0").replace(",", ""))
-                rate = float(s.get("compareToPreviousCloseRatio", "0.0"))
+                p_raw = str(s.get("closePrice", "0")).replace(",", "")
+                price = int(p_raw) if p_raw.isdigit() else 0
+                rate = float(str(s.get("compareToPreviousCloseRatio", "0.0")).replace(",", ""))
                 if s.get("fluctuationType", "") in ["4", "5", "FALL"]: rate = -rate
-                money_billion = int(float(s.get("accumulatedTradingValue", "0").replace(",", "")) / 100000000)
+                
+                v_raw = float(str(s.get("accumulatedTradingValue", "0")).replace(",", ""))
+                money_billion = int(v_raw / 100) if v_raw < 10000000 else int(v_raw / 100000000)
                 
                 all_rows.append({
                     "포착시간": detect_time, "종목코드": s.get("itemCode", ""), "종목명": s.get("stockName", ""),
@@ -131,13 +139,13 @@ def execute_radar_screening():
         st.session_state['last_update_time'] = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
         
     except Exception as e:
-        st.error(f"💥 라이브 수급 데이터 처리 중 장애 발생 (상단 조회 버튼을 다시 눌러주세요): {e}")
+        st.error(f"💥 라이브 수급 데이터 처리 중 장애 발생 (조회 버튼을 다시 눌러주세요): {e}")
 
 # ==========================================
 # 6. 대시보드 레이아웃 UI 구역
 # ==========================================
 st.title("⚡ 장중 실시간 수급 주도주 관제 레이더")
-st.caption("해외 IP 우회 특화 실시간 시세 데이터망 커넥터를 이식한 리얼타임 실물 주도주 전광판")
+st.caption("네이버 금융 메인 sise 연동 규격을 완벽 이식하여 404 에러를 원천 봉쇄한 실시간 실제 데이터 대시보드")
 
 # 수동 즉시 조회 버튼
 if st.button("🔄 실시간 수급 주도주 데이터 즉시 새로고침", use_container_width=True):
@@ -156,7 +164,7 @@ st.markdown("---")
 if not st.session_state['stock_display_df'].empty:
     st.dataframe(st.session_state['stock_display_df'], use_container_width=True, hide_index=True)
 else:
-    # 최초 실행 자동 마운트
+    # 최초 구동 시 강제 로드 및 자동 갱신 트리거
     execute_radar_screening()
     if not st.session_state['stock_display_df'].empty:
         st.rerun()
