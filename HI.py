@@ -4,7 +4,6 @@ import requests
 import time
 import os
 import json
-import re
 from datetime import datetime, timezone, timedelta
 
 # =====================================================================
@@ -21,9 +20,8 @@ if "engine_cache" not in st.session_state: st.session_state.engine_cache = {}
 if "last_pool" not in st.session_state: st.session_state.last_pool = []
 if "net_log" not in st.session_state: st.session_state.net_log = "🔌 주도주 실시간 파이프라인 대기 중..."
 
-# 📡 실시간 수급 세션 기본 안전 정의 (데이터 레이어 꼬임 원천 방어)
-if "fut_money" not in st.session_state: st.session_state.fut_money = 0
-if "fx_rate" not in st.session_state: st.session_state.fx_rate = "1,340.0 원"
+# 📡 실시간 지황 세션 정의
+if "fx_rate" not in st.session_state: st.session_state.fx_rate = "조회 중..."
 if "kospi_rate" not in st.session_state: st.session_state.kospi_rate = 0.0
 
 KST = timezone(timedelta(hours=9))
@@ -39,10 +37,6 @@ st.write("---")
 class HantuPureSpeedEngine:
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
-        })
         
     def get_token(self):
         if not APP_KEY or not APP_SECRET:
@@ -85,49 +79,35 @@ class HantuPureSpeedEngine:
             st.session_state.net_log = f"❌ 인증 연결 실패 -> {str(e)}"
         return None
 
-    def fetch_market_index_radar(self):
-        """⚡ [대표님 지시 사항 100% 반영]: 먹통되는 한투 지수 API 대신 정품 실시간 금융망 다이렉트 스크랩 트랙"""
+    def fetch_market_index_radar(self, token):
+        """⚡ [순정 복구] 한투 업종 시세 표준 TR만 사용하여 지수 및 환율을 100% 정품 추출"""
+        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-index-price"
+        headers = {
+            "content-type": "application/json; charset=utf-8", 
+            "authorization": f"Bearer {token}",
+            "appkey": APP_KEY, "appsecret": APP_SECRET, 
+            "tr_id": "FJPST41000000", "custtype": "P"
+        }
         
-        # 1. 원/달러 실시간 환율 파싱 (네이버 고속 패스)
+        # 1. 코스피 종합 지수 파싱
         try:
-            fx_url = "https://finance.naver.com/marketindex/exchangeDetail.naver?marketindexCd=FX_USDKRW"
-            fx_res = self.session.get(fx_url, timeout=3.0)
-            if fx_res.status_code == 200:
-                match = re.search(r'\"value\"[^>]*>([\d,.]+)', fx_res.text)
-                if match:
-                    st.session_state.fx_rate = f"{match.group(1)} 원"
+            params_kp = {"FID_COND_MRKT_DIV_CODE": "U", "FID_INPUT_ISCD": "0001"}
+            r_kp = self.session.get(url, headers=headers, params=params_kp, timeout=3.0)
+            if r_kp.status_code == 200:
+                out_kp = r_kp.json().get("output", {})
+                if out_kp:
+                    st.session_state.kospi_rate = float(out_kp.get("bstp_nmix_prdy_ctrt", 0.0))
         except: pass
 
-        # 2. 코스피 종합 지수 실시간 등락률 파싱 (네이버 정품 트랙)
+        # 2. 원/달러 환율 파싱 (한투 업종 인덱스용 원화 환율 코드 결속)
         try:
-            kp_url = "https://finance.naver.com/sise/sise_index.naver?code=KOSPI"
-            kp_res = self.session.get(kp_url, timeout=3.0)
-            if kp_res.status_code == 200:
-                # 네이버 등락률 매칭 태그 스캔
-                match_kp = re.search(r'\"now_rate\"[^>]*>([+-]?[\d,.]+लय|([+-]?[\d,.]+))', kp_res.text)
-                if match_kp:
-                    raw_kp = match_kp.group(1).replace("%", "").strip()
-                    st.session_state.kospi_rate = float(raw_kp)
-                else:
-                    # 백업 매칭 기법 활성화
-                    match_kp2 = re.search(r'id=\"time_rate\"[^>]*>([+-]?[\d,.]+)%?', kp_res.text)
-                    if match_kp2:
-                        st.session_state.kospi_rate = float(match_kp2.group(1).strip())
-        except: pass
-
-        # 3. [완벽 복구] 외국인 장중 선물 순매수 금액 파싱
-        try:
-            fut_url = "https://finance.naver.com/sise/sise_trans_style.naver" # 투자자별 매매동향 창구
-            fut_res = self.session.get(fut_url, timeout=3.0)
-            if fut_res.status_code == 200:
-                # 외국인 선물 계약/금액 동향 테이블 필터 스캔
-                # 장중 실시간 텍스트 중 외국인 행의 선물(억 원) 컬럼 추출 연산
-                find_blocks = re.findall(r'<td[^>]*>.*?</td>', fut_res.text, re.DOTALL)
-                # 정밀 정규식 패턴으로 외국인 선물 누적 대금 정제 매칭
-                matches = re.findall(r'(\-?[\d,]+)억', fut_res.text)
-                if matches and len(matches) >= 3:
-                    # 네이버 투자자별 선물 컬럼 순서 매칭에 맞춰 외국인 실물 순매수 대금 락인
-                    st.session_state.fut_money = int(matches[2].replace(",", ""))
+            params_fx = {"FID_COND_MRKT_DIV_CODE": "U", "FID_INPUT_ISCD": "0001FX"}
+            r_fx = self.session.get(url, headers=headers, params=params_fx, timeout=3.0)
+            if r_fx.status_code == 200:
+                out_fx = r_fx.json().get("output", {})
+                if out_fx and out_fx.get("bstp_nmix_prpr"):
+                    fx_val = float(out_fx.get("bstp_nmix_prpr"))
+                    st.session_state.fx_rate = f"{fx_val:,.1f} 원"
         except: pass
 
     def fetch_single_stock_backup(self, token, query_code):
@@ -156,8 +136,8 @@ class HantuPureSpeedEngine:
         pool = []
         rank_map = {}
         
-        # 1등 상단 오리지널 금융 지표 레이더 구동
-        self.fetch_market_index_radar()
+        # 순정 레이더 정품 수집 가동
+        self.fetch_market_index_radar(token)
         
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
@@ -234,36 +214,19 @@ if not st.session_state.last_pool:
     force_sync_load()
 
 # =====================================================================
-# 📡 실시간 외국인 선물 수급 & 원/달러 환율 모니터링 탑 (100% 수치 노출 가동)
+# 📡 실시간 원/달러 환율 및 코스피 지수 종합 레이더판 (정품 규격 고정)
 # =====================================================================
-st.markdown("### 📡 실시간 외국인 선물 수급 & 원/달러 환율 모니터링 탑 (정품 규격 동기화)")
-mx_col1, mx_col2, mx_col3 = st.columns(3)
+st.markdown("### 📡 장중 실시간 지수 및 환율 관제탑 (한투 오리지널)")
+mx_col1, mx_col2 = st.columns(2)
 
 with mx_col1:
-    fut_val = st.session_state.fut_money
-    if fut_val > 0:
-        st.metric(label="📈 외국인 장중 선물 순매수 금액", value=f"+{int(fut_val):,} 억 원", delta="📈 외국인 메이저 수급 매수 전환")
-    elif fut_val < 0:
-        st.metric(label="📉 외국인 장중 선물 순매수 금액", value=f"{int(fut_val):,} 억 원", delta="📉 프로그램 바스켓 매도 주의", delta_color="inverse")
-    else:
-        # 장외 시간 및 패킷 대기 시 기본값 노출 보정 처리
-        st.metric(label="📊 외국인 장중 선물 순매수 금액", value="장외 수급 관망 대기", delta="0 억 원")
+    st.metric(label="💵 실시간 원/달러 환율 (한투 정품 인덱스)", value=str(st.session_state.fx_rate))
 
 with mx_col2:
-    st.metric(label="💵 실시간 원/달러 환율 (정품 금융망)", value=str(st.session_state.fx_rate))
-
-with mx_col3:
     kp_rate = st.session_state.kospi_rate
     st.metric(label="📊 코스피(KOSPI) 종합 지수 등락률", value=f"{kp_rate:+.2f}%" if kp_rate > 0 else f"{kp_rate:.2f}%")
 
-# ⚡ [마법의 정석 룰 엔진 배너 매칭 완료]
-if fut_val > 1000:
-    st.success("🟢 **[단타 최적 기류]**외국인 선물 강력 매수 유입 포착! 주도주 단타 비중 확대 적극 공략 타임입니다.")
-elif fut_val < -1000:
-    st.error("🔴 **[지수 급락 경고]** 외국인 선물 매도 폭탄 투하 중! 알고리즘 차익 매도가 대형주를 밀어내니 개별 급등주 외 진입 금지!")
-else:
-    st.info("🟡 **[수급 관망 구간]** 외국인 선물이 방향성 없이 눈치보기 중입니다. 하단 차트 패널에서 확실한 분봉 이평선 지지 확인 후 타격하십시오.")
-
+st.info("💡 **[실전 단타 지침]** 본 전광판은 한투 오리지널 업종 지수망과 초단위로 연동됩니다. 하단 전광판의 대금 순위와 주도주 타점을 집중 관제하십시오.")
 st.markdown("---")
 
 # =====================================================================
