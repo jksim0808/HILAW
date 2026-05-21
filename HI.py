@@ -5,11 +5,17 @@ import time
 import os
 import re
 from datetime import datetime, timezone, timedelta
+# 1. 자동 리프레시 라이브러리 임포트
+from streamlit_autorefresh import st_autorefresh
 
 # =====================================================================
 # ⚙️ [최우선] Streamlit 설정 및 세션 초기화 (로컬 초고속 무비용 모드)
 # =====================================================================
 st.set_page_config(page_title="장중 실시간 주도주 마스터 스캐너 Pro", layout="wide")
+
+# 2. 60초(60000ms)마다 백그라운드에서 안전하게 앱을 리 rerun 하도록 설정
+#    사용자가 체크박스를 누르는 등 상호작용 중일 때는 방해하지 않고 부드럽게 동작합니다.
+st_autorefresh(interval=60000, key="datarefresh")
 
 if "last_pool" not in st.session_state: st.session_state.last_pool = []
 if "pure_fut_money" not in st.session_state: st.session_state.pure_fut_money = 0
@@ -20,6 +26,7 @@ KST = timezone(timedelta(hours=9))
 st.title("🎯 AI 당일 상승 주도주 실시간 스캐너 (순수 거래대금 대장주 전광판)")
 st.warning(f"📡 **실시간 라인 진단 모니터:** {st.session_state.net_log}")
 st.write("---")
+
 
 # =====================================================================
 # 🏹 대한민국 시장 돈의 흐름을 긁어오는 무중단 가상 우회 엔진
@@ -42,13 +49,15 @@ class LocalBypassMasterEngine:
                 blocks = [t.strip() for t in text_clean.split('|') if t.strip()]
                 for idx, word in enumerate(blocks):
                     if "외국인" in word and idx < len(blocks) - 10:
-                        sub_list = blocks[idx:idx+15]
-                        money_matches = [m for m in sub_list if "억" in m or (m.replace("-","").replace(",","").isdigit() and len(m) >= 2)]
+                        sub_list = blocks[idx:idx + 15]
+                        money_matches = [m for m in sub_list if
+                                         "억" in m or (m.replace("-", "").replace(",", "").isdigit() and len(m) >= 2)]
                         if len(money_matches) >= 3:
                             raw_val = money_matches[2].replace("억", "").replace(",", "").strip()
                             st.session_state.pure_fut_money = int(raw_val)
                             return
-        except: pass
+        except:
+            pass
 
     def fetch_bulk_stock_prices(self, stock_codes):
         """모든 종목 단가를 단 한 방의 패킷으로 통합 캐스팅 (토큰 의존성 0%)"""
@@ -67,34 +76,36 @@ class LocalBypassMasterEngine:
                         ctrt = float(item.get("cr", 0.0))
                         amt = float(item.get("aq", 0)) * price
                         bulk_dict[c] = {"price": price, "ctrt": ctrt, "amt": amt}
-        except: pass
+        except:
+            pass
         return bulk_dict
 
     def build_live_market_pool(self):
         self.fetch_live_foreigner_future()
         pool = []
-        
+
         watchlist = [
-            ("011200", "HMM"), ("005930", "삼성전자"), ("000660", "SK하이닉스"), 
-            ("005380", "현대차"), ("068270", "셀트리온"), ("035420", "NAVER"), 
-            ("000270", "기아"), ("373220", "LG에너지솔루션"), ("207940", "삼성바이오로직스"), 
+            ("011200", "HMM"), ("005930", "삼성전자"), ("000660", "SK하이닉스"),
+            ("005380", "현대차"), ("068270", "셀트리온"), ("035420", "NAVER"),
+            ("000270", "기아"), ("373220", "LG에너지솔루션"), ("207940", "삼성바이오로직스"),
             ("005490", "POSCO홀딩스"), ("035720", "카카오"), ("000150", "두산"), ("051910", "LG화학")
         ]
         stock_codes = [w[0] for w in watchlist]
-        
+
         bulk_prices = self.fetch_bulk_stock_prices(stock_codes)
-        
+
         for idx, (c, n) in enumerate(watchlist):
             if c in bulk_prices and bulk_prices[c]["price"] > 0:
                 res = bulk_prices[c]
                 pool.append((idx + 1, c, n, res["price"], res["ctrt"], res["amt"]))
             else:
                 pool.append((idx + 1, c, n, 45000, 0.0, 150000000000))
-                
+
         if pool:
             st.session_state.net_log = f"🚀 [통합 파이프라인 완전 결속] 대한민국 실물 수급망 다이렉트 동기화 중 ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
             return pool
         return st.session_state.last_pool
+
 
 # =====================================================================
 # ⚡ [상시 표출 시스템 브릿지 - 가상 회선 완전 결속]
@@ -114,7 +125,8 @@ with col_radar1:
     st.image(f"https://ssl.pstatic.net/imgfinance/chart/main/KOSPI.png?sid={time_seed}", use_container_width=True)
 with col_radar2:
     st.markdown("**💵 원/달러 환율 실시간 추이**")
-    st.image(f"https://ssl.pstatic.net/imgfinance/chart/marketindex/FX_USDKRW.png?sid={time_seed}", use_container_width=True)
+    st.image(f"https://ssl.pstatic.net/imgfinance/chart/marketindex/FX_USDKRW.png?sid={time_seed}",
+             use_container_width=True)
 
 # =====================================================================
 # 🚦 [터널 공정 완성] 3단계 수급 행동명령 신호등 전광판 (무조건 노출)
@@ -125,7 +137,8 @@ live_fut = st.session_state.pure_fut_money
 if live_fut > 0:
     st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"+{live_fut:,} 억 원", delta="📈 외국인 메이저 상방 드라이브 가동")
 elif live_fut < 0:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"{live_fut:,} 억 원", delta="📉 외국인 프로그램 차익 매도 주의", delta_color="inverse")
+    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"{live_fut:,} 억 원", delta="📉 외국인 프로그램 차익 매도 주의",
+              delta_color="inverse")
 else:
     st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value="0 억 원", delta="⏱️ 장외 대기 또는 실시간 누적 수급 보합")
 
@@ -134,7 +147,8 @@ if live_fut >= 1000:
 elif live_fut <= -1000:
     st.error(f"🔴 **[지수 급락 경고] 매도로 시장을 짓누르면 매도 폭탄 투하 중! ({live_fut:,}억)** 개별 테마주 외 진입 금지 경고등을 켜서 자금을 잠그도록 보호합니다.")
 else:
-    st.info(f"🟡 **[수급 관망 기류] 외국인 선물 누적 잔고 박스권 횡보 중 ({live_fut:,}억)** 무리한 대형주 추격 매수를 엄금하고 하단 주도주 분류표의 분봉 눌림목 타점을 관찰하십시오.")
+    st.info(
+        f"🟡 **[수급 관망 기류] 외국인 선물 누적 잔고 박스권 횡보 중 ({live_fut:,}억)** 무리한 대형주 추격 매수를 엄금하고 하단 주도주 분류표의 분봉 눌림목 타점을 관찰하십시오.")
 
 st.markdown("---")
 
@@ -151,11 +165,10 @@ scalping_targets = []
 
 if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
     for idx, row in enumerate(st.session_state.last_pool):
-        if isinstance(row, tuple) and len(row) == 6: 
+        if isinstance(row, tuple) and len(row) == 6:
             raw_rank, t, n, price, ctrt, amt = row
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
-            # 상위 50위권 주도주 명부 무조건 포획 노출
             if raw_rank <= 50:
                 scalping_targets.append({
                     "포착순위": f"🔥 {len(scalping_targets) + 1}순위", "종목코드": t,
@@ -185,7 +198,7 @@ if not df_scalping.empty:
 st.write("---")
 
 # =====================================================================
-# 📈 [하단 구역] 네이버 실시간 차트 스튜디오 (종합순위표 삭제 후 다이렉트 표출)
+# 📈 [하단 구역] 네이버 실시간 차트 스튜디오
 # =====================================================================
 st.markdown("### 📈 네이버 페이 증권 실시간 오리지널 차트 패널")
 if selected_ticker:
@@ -199,8 +212,6 @@ if selected_ticker:
         st.image(naver_day_chart, caption=f"[{selected_name}] 네이버 실시간 일봉 캔들 추세 지지선", use_container_width=True)
 
 # =====================================================================
-# ⏱️ [장중 상시 자동 관제]: 60초 무중단 리프레시 엔진
+# ⏱️ [장중 상시 자동 관제]: 안전 가이드 문구 변경
 # =====================================================================
-st.caption("⚙️ **자동 감시 시스템 가동 중:** 장중 최신 거래대금 파싱을 위해 60초마다 백그라운드 리프레시를 자동 수행합니다.")
-time.sleep(60)
-st.rerun()
+st.caption("⚙️ **자동 감시 시스템 가동 중:** `st_autorefresh` 엔진이 UI 얼어붙음 없이 60초마다 수급망 데이터를 안전하게 갱신합니다.")
