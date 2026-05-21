@@ -8,20 +8,9 @@ import re
 from datetime import datetime, timezone, timedelta
 
 # =====================================================================
-# ⚙️ [최우선] Streamlit 설정 및 세션 초기화 (캐시 찌꺼기 영구 박멸)
+# ⚙️ [최우선] Streamlit 설정 및 세션 초기화
 # =====================================================================
 st.set_page_config(page_title="장중 실시간 주도주 마스터 스캐너 Pro", layout="wide")
-
-TOKEN_FILE = "hantu_token_cache.json"
-
-if os.path.exists(TOKEN_FILE):
-    try:
-        with open(TOKEN_FILE, "r") as f:
-            test_cache = json.load(f)
-        if not test_cache.get("token"): os.remove(TOKEN_FILE)
-    except:
-        try: os.remove(TOKEN_FILE)
-        except: pass
 
 APP_KEY = st.secrets.get("HANTU_APP_KEY", "").strip()
 APP_SECRET = st.secrets.get("HANTU_APP_SECRET", "").strip()
@@ -34,6 +23,7 @@ if "net_log" not in st.session_state: st.session_state.net_log = "🔌 주도주
 if "pure_fut_money" not in st.session_state: st.session_state.pure_fut_money = 0
 
 KST = timezone(timedelta(hours=9))
+TOKEN_FILE = "hantu_token_cache.json"
 
 st.title("🎯 AI 당일 상승 주도주 실시간 스캐너 (순수 거래대금 대장주 전광판)")
 st.warning(f"📡 **실시간 라인 진단 모니터:** {st.session_state.net_log}")
@@ -46,8 +36,9 @@ class HantuPureSpeedEngine:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
-            "Referer": "https://m.stock.naver.com/"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
         })
         
     def get_token(self):
@@ -97,57 +88,35 @@ class HantuPureSpeedEngine:
                             return
         except: pass
 
-    def fetch_single_stock_backup(self, query_code):
-        """⚡ [더미값 주가 완벽 분쇄] 네이버 모바일 전용 초고속 순정 API 타격으로 찐 현재가/대금 적재"""
+    def fetch_single_stock_backup(self, token, query_code):
+        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
+        headers = {
+            "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
+            "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01010000", "custtype": "P"
+        }
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": query_code}
         try:
-            url = f"https://m.stock.naver.com/api/stock/{query_code}/integration"
-            r = self.session.get(url, timeout=3.0)
+            r = self.session.get(url, headers=headers, params=params, timeout=2.5)
             if r.status_code == 200:
-                json_data = r.json()
-                stock_total = json_data.get("totalInfos", [{}])[0]
-                
-                if stock_total:
-                    # '125,000' 형태의 문자열을 순수 정수형 숫자로 파싱 보정
-                    price_str = str(stock_total.get("closePrice", "0")).replace(",", "")
-                    price = int(price_str) if price_str.isdigit() else 0
-                    
-                    # 등락률 파싱
-                    ctrt = float(str(stock_total.get("fluctuationRate", "0.0")).replace("+", ""))
-                    
-                    # KRX 기준 당일 누적 거래대금 문자열 파싱 (예: "4,821억")
-                    raw_amt_str = str(stock_total.get("accumulatedTradingValue", "0")).replace(",", "")
-                    amt_num = int("".join(filter(str.isdigit, raw_amt_str))) if any(chr.isdigit() for chr in raw_amt_str) else 0
-                    amt = amt_num * 100000000  # 억 단위를 원 단위 스케일로 바인딩
-                    
-                    if price > 0:
-                        return {"price": price, "ctrt": ctrt, "amt": amt, "stat": "00"}
+                out = r.json().get("output", {})
+                if out:
+                    p_str = "".join(filter(str.isdigit, str(out.get("stck_prpr", "0"))))
+                    price = int(p_str) if p_str else 0
+                    ctrt = float(out.get("prdy_ctrt", 0.0))
+                    stat = str(out.get("iscd_stat_cls_code", "00")).strip()
+                    v_str = "".join(filter(str.isdigit, str(out.get("acml_tr_pbmn", "0"))))
+                    raw_amt = float(v_str) if v_str else 0.0
+                    return {"price": price, "ctrt": ctrt, "amt": raw_amt, "stat": stat}
         except: pass
         return None
 
     def fetch_market_pool_by_indices(self, token):
         self.fetch_live_foreigner_future()
+        if token == "BYPASS_MODE" or not token:
+            return st.session_state.last_pool
+
         pool = []
         rank_map = {}
-        
-        watchlist = [
-            ("011200", "HMM"), ("005930", "삼성전자"), ("000660", "SK하이닉스"), 
-            ("005380", "현대차"), ("068270", "셀트리온"), ("035420", "NAVER"), 
-            ("000270", "기아"), ("373220", "LG에너지솔루션"), ("207940", "삼성바이오로직스"), 
-            ("005490", "POSCO홀딩스"), ("035720", "카카오"), ("000150", "두산"), ("051910", "LG화학")
-        ]
-
-        # ⚡ 한투망이 해외 IP 검문으로 차단되어 우회 모드로 들어왔을 때 찐 주가 매핑 기믹
-        if token == "BYPASS_MODE" or not token:
-            for idx, (c, n) in enumerate(watchlist):
-                res = self.fetch_single_stock_backup(c)
-                if res and res["price"] > 0:
-                    pool.append((idx + 1, c, n, res["price"], res["ctrt"], res["amt"], res["stat"]))
-                else:
-                    # 통신 순간 유실 시 직전 잔상 유지 가드
-                    pool.append((idx + 1, c, n, 50000, 0.0, 100000000000, "00"))
-            st.session_state.net_log = f"🟢 금융망 모바일 파이프라인 실물 주가 결속 성공! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
-            return pool
-
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
             "content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}",
@@ -160,13 +129,11 @@ class HantuPureSpeedEngine:
             "FID_INPUT_PRICE_1": "0", "FID_INPUT_PRICE_2": "0", "FID_VOL_CNT": "", "FID_INPUT_DATE_1": ""          
         }
         try:
-            r = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=3.5)
-            if r.status_code == 200:
-                vol_output = r.json().get("output", [])
+            r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=3.5)
+            if r_vol.status_code == 200:
+                vol_output = r_vol.json().get("output", [])
                 mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
-                rank_idx = 1
-                
-                for item in vol_output:
+                for rank_idx, item in enumerate(vol_output):
                     t_code = str(item.get("mksc_shrn_iscd", "")).strip()[-6:]
                     if not t_code.isdigit(): continue
                     name = str(item.get("hts_kor_isnm", item.get("data_name", ""))).strip()
@@ -180,34 +147,32 @@ class HantuPureSpeedEngine:
                     
                     is_mega_cap = (t_code in mega_cap_codes or "하이닉스" in name or "삼성전자" in name or "현대차" in name)
                     if price < 1000 and not is_mega_cap: continue 
+                    if ctrt <= -12.0 and not is_mega_cap: continue 
                     
-                    pool.append((rank_idx, t_code, name, price, ctrt, raw_amt, stat))
-                    rank_idx += 1
+                    rank_map[t_code] = True
+                    pool.append((rank_idx + 1, t_code, name, price, ctrt, raw_amt, stat))
+                
+                watchlist_backups = [("000660", "SK하이닉스"), ("005930", "삼성전자"), ("011200", "HMM")]
+                for b_code, b_name in watchlist_backups:
+                    if b_code not in rank_map:
+                        time.sleep(0.1) 
+                        b_res = self.fetch_single_stock_backup(token, b_code)
+                        if b_res: pool.append((999, b_code, b_name, b_res["price"], b_res["ctrt"], b_res["amt"], b_res["stat"]))
                 
                 st.session_state.net_log = f"🟢 한투 실전망 대장주 순수 동기화 완료! ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
                 pool.sort(key=lambda x: x[0])
                 return pool
-        except: pass
-        
-        # 3차 비상 방어망 구동 시에도 진짜 단가 호출 매핑
-        if not pool:
-            for idx, (c, n) in enumerate(watchlist):
-                res = self.fetch_single_stock_backup(c)
-                if res and res["price"] > 0:
-                    pool.append((idx + 1, c, n, res["price"], res["ctrt"], res["amt"], res["stat"]))
-            return pool
-            
+        except Exception as e: 
+            st.session_state.net_log = f"❌ 주도주 수집망 순정 복구 엔진 기동 중"
         return st.session_state.last_pool
 
 # =====================================================================
-# ⚡ [상시 표출 시스템 브릿지 - 데이터 완전 결속 락인]
+# ⚡ [상시 표출 시스템 브릿지 - 순정 결속]
 # =====================================================================
 engine = HantuPureSpeedEngine()
 token = engine.get_token()
 res_pool = engine.fetch_market_pool_by_indices(token)
-
-if res_pool and len(res_pool) > 0: 
-    st.session_state.last_pool = res_pool
+if res_pool: st.session_state.last_pool = res_pool
 
 # =====================================================================
 # 📡 [상단 구역] 네이버 오리지널 실시간 캔들 시황판 이식
@@ -242,7 +207,7 @@ elif live_fut <= -1000:
 else:
     st.info(f"🟡 **[수급 관망 기류] 외국인 선물 누적 잔고 박스권 횡보 중 ({live_fut:,}억)** 무리한 대형주 추격 매수를 엄금하고 하단 주도주 분류표의 분봉 눌림목 타점을 관찰하십시오.")
 
-# 🎯 [대표님 오더 반영] 수급 데이터 판독 전용 핵심 요약 안내 가이드 탑탑 장착
+# 🎯 수급 데이터 판독 전용 핵심 요약 안내 가이드 탑탑 장착
 with st.expander("💡 대표님 전용 [선물 누적 수급 수치 판독 지침서]", expanded=False):
     st.markdown("""
     * **🔍 HTS 실시간 동기화 검증 메뉴:**
@@ -293,12 +258,9 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
             is_mega_cap = (t in mega_cap_codes or "하이닉스" in n or "삼성전자" in n or "현대차" in n)
             
-            if amt > 100000000:
-                amt_display = f"{int(amt / 100000000):,}억 원"
-            else:
-                amt_display = "실시간 집계 중"
+            amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
-            # 상위 50위권 주도주 조건 없이 과감히 표출
+            # 🛠️ [순정 락해제] 한투 대금 상위 50위권 내 쌩쌩한 주도주 조건 없이 노출
             if raw_rank <= 50 and not is_mega_cap:
                 scalping_targets.append({
                     "포착순위": f"🔥 {len(scalping_targets) + 1}순위", "종목코드": t,
@@ -316,19 +278,6 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
                 "당일 대금 순위": "100위권 밖" if raw_rank == 999 else f"{raw_rank}위", "종목코드": t,
                 "종목명": d_name, "수급 등급 분류": r_grade, "현재가": f"{price:,}원", 
                 "등락률": f"{ctrt:+.2f}%" if ctrt > 0 else f"{ctrt:.2f}%", "당일 누적대금": amt_display, "실전 행동 지침": a_tag
-            })
-
-    # 독점 방지 및 실물 가드 매립
-    if len(scalping_targets) == 0:
-        for idx, row in enumerate(st.session_state.last_pool[:8]):
-            raw_rank, t, n, price, ctrt, amt, stat = row
-            if amt > 100000000: amt_display = f"{int(amt / 100000000):,}억 원"
-            else: amt_display = "실시간 집계 중"
-            scalping_targets.append({
-                "포착순위": f"⚡ 고정 {idx+1}위", "종목코드": t,
-                "종목명": f"🎯[최상위대금] {n}", "현재가": f"{price:,}원",
-                "등락률": f"{ctrt:+.2f}%", "당일 거래대금": amt_display,
-                "실전 타격 지침": "🏛️ 당일 최고 대금 집중 종목 (무조건 노출 모드 가동)"
             })
 
 df_scalping = pd.DataFrame(scalping_targets)
@@ -349,6 +298,8 @@ if not df_scalping.empty:
     if not sc_selected.empty:
         selected_ticker = sc_selected.iloc[0]["종목코드"]
         selected_name = sc_selected.iloc[0]["종목명"].split("]")[-1].strip()
+else:
+    st.info("💡 장세 변동성 필터 가동 중 / 아래 종합 순위표에서 주도주를 직접 클릭해 차트를 연동하십시오.")
 
 st.markdown("### 📊 당일 실시간 주도주 마스터 종합 순위표 (시황 전광판)")
 if not df_normal.empty:
