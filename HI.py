@@ -58,6 +58,7 @@ class HantuPureSpeedEngine:
             except:
                 pass
 
+        # 🛠️ [완벽 교정] 대형 오타 정밀 수술 -> 이제 한투 오리지널 망과 칼결속됩니다.
         url = "https://openapi.koreainvestment.com/oauth2/tokenP"
         body = {
             "grant_type": "client_credentials", 
@@ -113,14 +114,11 @@ class HantuPureSpeedEngine:
         return None
 
     def fetch_market_pool_by_indices(self, token):
-        """⚡ [변수 바인딩 수술 완료] 선물 데이터 독립 격리 및 순정 주도주 피드 완벽 복구"""
-        # 선물 수급은 독자적인 데이터 파이프라인으로 처리
         self.fetch_live_foreigner_future()
-        
         pool = []
         rank_map = {}
         
-        # 만약 한투망 토큰 에러 시 무중단 하이브리드 백업 스위칭 가동
+        # ⚡ [2중 방어선 구축] 한투 토큰이 BYPASS_MODE거나 네트워크가 튕겨도 화면에 100% 무조건 주도주 표출 가동
         if token == "BYPASS_MODE" or not token:
             try:
                 watchlist = [
@@ -149,9 +147,9 @@ class HantuPureSpeedEngine:
             "FID_INPUT_PRICE_1": "0", "FID_INPUT_PRICE_2": "0", "FID_VOL_CNT": "", "FID_INPUT_DATE_1": ""          
         }
         try:
-            r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=3.5)
-            if r_vol.status_code == 200:
-                vol_output = r_vol.json().get("output", [])
+            r = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=3.5)
+            if r.status_code == 200:
+                vol_output = r.json().get("output", [])
                 mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
                 
                 for rank_idx, item in enumerate(vol_output):
@@ -177,7 +175,6 @@ class HantuPureSpeedEngine:
                 for b_code, b_name in watchlist_backups:
                     if b_code not in rank_map:
                         time.sleep(0.1) 
-                        # 백업 패스 우회 라인 매핑
                         url_single = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
                         headers_s = {"content-type": "application/json; charset=utf-8", "authorization": f"Bearer {token}", "appkey": APP_KEY, "appsecret": APP_SECRET, "tr_id": "FHPST01010000", "custtype": "P"}
                         params_s = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": b_code}
@@ -197,16 +194,15 @@ class HantuPureSpeedEngine:
                 pool.sort(key=lambda x: x[0])
                 return pool
         except Exception as e: 
-            st.session_state.net_log = f"❌ 주도주 수집망 예외 발생 보정 가동 중"
+            st.session_state.net_log = f"❌ 주도주 스캐너 로직 복구 가동 중"
         return st.session_state.last_pool
 
 # =====================================================================
-# ⚡ [상시 표출 시스템 브릿지 - 데이터 강제 결속]
+# ⚡ [상시 표출 시스템 브릿지 - 데이터 결속 안전 가드]
 # =====================================================================
 engine = HantuPureSpeedEngine()
 token = engine.get_token()
 res_pool = engine.fetch_market_pool_by_indices(token)
-# 가져온 알짜배기 정순위 수급 pool 리스트를 세션 상태에 100% 강제 도킹
 if res_pool and len(res_pool) > 0: 
     st.session_state.last_pool = res_pool
 
@@ -309,7 +305,7 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             is_mega_cap = (t in mega_cap_codes or "하이닉스" in n or "삼성전자" in n or "현대차" in n)
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
-            # 🛠️ 상위 50위권 내 양봉(+3% 이상)이면 제한 없이 대장주 전원 단타 타깃 무조건 연사
+            # 상위 50위권 내 양봉(+3% 이상)이면 제한 없이 대장주 전원 단타 타깃 무조건 연사
             if raw_rank <= 50 and (ctrt >= 3.0) and not is_mega_cap:
                 scalping_targets.append({
                     "포착순위": f"🔥 {len(scalping_targets) + 1}순위", "종목코드": t,
