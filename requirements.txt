@@ -3,3 +3,4 @@ pandas
 schedule
 python-telegram-bot
 pytz
+streamlit-autorefresh
