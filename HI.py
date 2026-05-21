@@ -4,7 +4,6 @@ import requests
 import time
 import os
 import json
-import re
 from datetime import datetime, timezone, timedelta
 
 # =====================================================================
@@ -21,7 +20,7 @@ if "engine_cache" not in st.session_state: st.session_state.engine_cache = {}
 if "last_pool" not in st.session_state: st.session_state.last_pool = []
 if "net_log" not in st.session_state: st.session_state.net_log = "🔌 주도주 실시간 파이프라인 대기 중..."
 
-# 📡 실시간 수급 지표 메모리 세션 매립
+# 📡 실시간 수급 지표 공인 데이터 레이어 매립
 if "pure_fut_money" not in st.session_state: st.session_state.pure_fut_money = 0
 
 KST = timezone(timedelta(hours=9))
@@ -37,10 +36,6 @@ st.write("---")
 class HantuPureSpeedEngine:
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Referer": "https://finance.naver.com/"
-        })
         
     def get_token(self):
         if not APP_KEY or not APP_SECRET:
@@ -83,20 +78,30 @@ class HantuPureSpeedEngine:
             st.session_state.net_log = f"❌ 인증 연결 실패 -> {str(e)}"
         return None
 
-    def fetch_live_foreigner_future(self):
-        """⚡ [100% 실물 정품 데이터 스캔 엔진]: 껍데기 html 파싱 전면 폐기 -> 네이버 순정 실시간 금융망 수급 데이터셋 다이렉트 바인딩"""
+    def fetch_live_foreigner_future(self, token):
+        """⚡ [국가 공인 수급망 개설]: 가드 걸리는 사설 웹을 파싱하는 대신, 대표님 계정의 한투 공식 투자자별 데이터 TR로 우회 집계"""
+        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/investor-trend-by-market"
+        headers = {
+            "content-type": "application/json; charset=utf-8",
+            "authorization": f"Bearer {token}",
+            "appkey": APP_KEY, "appsecret": APP_SECRET,
+            "tr_id": "FHPST06430000", "custtype": "P" # 실시간 투자자 동향 정품 TR
+        }
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "F", # 선물 시장 코드 고정 락인
+            "FID_INPUT_ISCD": "00000000"
+        }
         try:
-            # 실시간 투자자별 매매동향 오리지널 데이터셋 API 타격
-            target_url = "https://polling.finance.naver.com/api/realtime/domestic/investors"
-            res = self.session.get(target_url, timeout=3.0)
-            if res.status_code == 200:
-                json_data = res.json()
-                # 수급 데이터셋 파이프라인에서 외국인(foreign)의 선물(nets) 실시간 누적 대금 추출
-                investors = json_data.get("result", {}).get("investorTrend", [])
-                for inv in investors:
-                    if inv.get("investorCode") == "FOREIGN": # 외국인 타깃 락인
-                        # 선물 누적 금액 (네이버 단위 기준 억 원 스케일 자동 정밀 변환)
-                        st.session_state.pure_fut_money = int(inv.get("futureNetPurchaseAmount", 0))
+            r = self.session.get(url, headers=headers, params=params, timeout=3.0)
+            if r.status_code == 200:
+                outputs = r.json().get("output1", [])
+                for row in outputs:
+                    # '외국인투자자' 혹은 '외국인' 문자열이 들어간 실시간 누적 순매수 대금 색출
+                    if "외국인" in row.get("prsn_stts_name", ""):
+                        # 억 원 단위로 정밀 리스케일링 연산
+                        raw_money = int(float(row.get("ntby_money", 0)) / 100)
+                        if raw_money != 0:
+                            st.session_state.pure_fut_money = raw_money
                         break
         except:
             pass
@@ -127,8 +132,8 @@ class HantuPureSpeedEngine:
         pool = []
         rank_map = {}
         
-        # 순정 데이터셋 실시간 수급 연동 실행
-        self.fetch_live_foreigner_future()
+        # 국가 공인 투자자 데이터셋 즉시 동기화 가동
+        self.fetch_live_foreigner_future(token)
         
         url_vol = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank"
         headers_vol = {
@@ -221,25 +226,25 @@ with col_radar2:
     st.image(f"https://ssl.pstatic.net/imgfinance/chart/marketindex/FX_USDKRW.png?sid={time_seed}", use_container_width=True)
 
 # =====================================================================
-# 🚦 [정품 수술 완료]: JSON 다이렉트 라인 동기화형 3단계 행동명령 신호등
+# 🚦 [정품 수술 최종 완료]: 한투 투자자 동향 다이렉트 바인딩 3단계 명령어 신호등
 # =====================================================================
-st.markdown("#### 🚨 외국인 장중 실시간 선물 순매수 동기화 패널 (라이브 데이터셋)")
+st.markdown("#### 🚨 외국인 장중 실시간 선물 순매수 동기화 패널 (공인 정품 트랙)")
 live_fut = st.session_state.pure_fut_money
 
 if live_fut > 0:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품)", value=f"+{live_fut:,} 억 원", delta="📈 외국인 실물 수급 상방 드라이브")
+    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"+{live_fut:,} 억 원", delta="📈 외국인 실물 수급 상방 드라이브")
 elif live_fut < 0:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품)", value=f"{live_fut:,} 억 원", delta="📉 외국인 실물 수급 하방 압박", delta_color="inverse")
+    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"{live_fut:,} 억 원", delta="📉 외국인 실물 수급 하방 압박", delta_color="inverse")
 else:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품)", value="0 억 원", delta="⏱️ 장외 대기 또는 수급 파이프라인 정렬 중")
+    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value="0 억 원", delta="⏱️ 장외 대기 또는 실시간 수급 파이프라인 정렬 중")
 
-# ⚡ 대표님 특별 오더 적용: 장중 외인 선물금액 매칭형 3단계 신호등 명령어
+# ⚡ 대표님 특별 오더 적용: 장중 외인 선물금액 매칭형 3단계 신호등 명령어 무조건 출력
 if live_fut >= 1000:
     st.success(f"🟢 **[단타 최적 기류] 외국인 선물 강력 매수 유입 중! ({live_fut:,}억)** 메시지가 뜨며 안심하고 자금을 투입할 타이밍임을 알려줍니다.")
 elif live_fut <= -1000:
     st.error(f"🔴 **[지수 급락 경고] 매도로 시장을 짓누르면 매도 폭탄 투하 중! ({live_fut:,}억)** 개별 테마주 외 진입 금지 경고등을 켜서 자금을 잠그도록 보호합니다.")
 else:
-    st.info(f"🟡 **[수급 관망 기류]** 외국인 선물이 {live_fut:,}억 원 규모로 보합권 조절 중입니다. 무리한 베팅 대신 하단 주도주 분봉 눌림목 지지선을 철저히 타격하십시오.")
+    st.info(f"🟡 **[수급 관망 기류] 외국인 선물 누적 잔고 보합권 이동 중 ({live_fut:,}억)** 무리한 대형주 추격 매수를 자제하고 하단 주도 테마의 분봉 눌림목 지지선을 철저히 타격하십시오.")
 
 st.markdown("---")
 
