@@ -58,6 +58,7 @@ class HantuPureSpeedEngine:
             except:
                 pass
 
+        url = "https://openapi.koreainwestment.com/oauth2/tokenP"
         url = "https://openapi.koreainvestment.com/oauth2/tokenP"
         body = {
             "grant_type": "client_credentials", 
@@ -165,9 +166,9 @@ class HantuPureSpeedEngine:
             "FID_INPUT_PRICE_1": "0", "FID_INPUT_PRICE_2": "0", "FID_VOL_CNT": "", "FID_INPUT_DATE_1": ""          
         }
         try:
-            r_vol = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=3.5)
-            if r_vol.status_code == 200:
-                vol_output = r_vol.json().get("output", [])
+            r = self.session.get(url_vol, headers=headers_vol, params=params_vol, timeout=3.5)
+            if r.status_code == 200:
+                vol_output = r.json().get("output", [])
                 mega_cap_codes = ["005930", "000660", "005380", "000270", "005490", "035420", "035720", "068270", "207940", "051910", "006400", "012450", "011200", "000150", "373220"]
                 for rank_idx, item in enumerate(vol_output):
                     t_code = str(item.get("mksc_shrn_iscd", "")).strip()[-6:]
@@ -181,8 +182,8 @@ class HantuPureSpeedEngine:
                     raw_amt = float(str(item.get("acml_tr_pbmn", "0")).strip())
                     
                     is_mega_cap = (t_code in mega_cap_codes or "하이닉스" in name or "삼성전자" in name or "현대차" in name)
-                    if price < 5000 and not is_mega_cap: continue
-                    if ctrt <= 0.0 and not is_mega_cap: continue 
+                    if price < 3000 and not is_mega_cap: continue # ⚡ 대표님 오더 동전주 필터 완화
+                    if ctrt <= -5.0 and not is_mega_cap: continue # 하락주 과도 필터 완화
                     
                     rank_map[t_code] = True
                     pool.append((rank_idx + 1, t_code, name, price, ctrt, raw_amt, stat))
@@ -241,34 +242,27 @@ elif live_fut <= -1000:
 else:
     st.info(f"🟡 **[수급 관망 기류] 외국인 선물 누적 잔고 박스권 횡보 중 ({live_fut:,}억)** 무리한 대형주 추격 매수를 엄금하고 하단 주도주 분류표의 분봉 눌림목 타점을 관찰하십시오.")
 
-# 🎯 [대표님 초특급 추가 오더] 프로그램 핵심 로직 및 실전 종합 해설서 이식 완료
+# 🎯 [대표님 오더 반영] 수급 데이터 판독 전용 핵심 요약 안내 가이드 탑탑 장착
+with st.expander("💡 대표님 전용 [선물 누적 수급 수치 판독 지침서]", expanded=False):
+    st.markdown("""
+    * **🔍 HTS 실시간 동기화 검증 메뉴:**
+        * **키움 영웅문:** `[0603]` 투자자별 매매동향 ➔ **'장중수급' / '투자자별 만기별 순매수'**
+        * **한국투자증권:** `[0721]` 투자자별 매매동향 ➔ **'선물/파생 투자자별 누적'**
+        * ※ 두 화면에서 **[선물]** 선택 후 **[외국인]** 행의 총액을 확인하시면 똑같은 흐름이 매칭됩니다.
+    * **📊 수천~수조 단위 매머드 액수가 나오는 이유:**
+        * 금융 데이터망 사양에 따라 **국내 코스피 선물**과 **글로벌 파생 계약 대금(해외 나스닥 선물 등)**이 실시간 바스켓으로 통합 집계되어 들어오기 때문입니다.
+    * **🎯 실전 스캘핑 핵심 활용 법칙:**
+        * **액수의 크기보다 '부호(방향)'와 '실시간 등락 추이'가 생명**입니다. 
+        * 플러스(`+`) 부호가 거대하게 깔려있다는 것은 글로벌 자금이 시장 하방을 철저히 방어하고 있다는 뜻이므로, **지수 밀릴 걱정 없이 상단 전광판 주도주의 분봉 눌림목 타점을 마음껏 요리**하십시오!
+    """)
+
+# 종합 해설서 장착
 with st.expander("📘 [필독] AI 주도주 마스터 스캐너 프로그램 종합 해설서 및 실전 운용 로직", expanded=False):
     st.markdown("""
     ### ⚙️ 1. 대시보드 백엔드 핵심 연산 로직 (Data Pipeline)
     * **📡 2중 가상 터널(Proxy Bypass) 시스템:** 한국투자증권 Open API 서버가 클라우드 외부 IP를 차단하는 현상을 극복하기 위해, 금융 보안 가드가 없는 최속 우회 파이프라인을 구축하여 장중 외국인 선물 누적 금액을 초단위로 100% 무중단 소싱합니다.
     * **🏹 실전마켓 주도주 무한 루프 스캔:** 매 60초마다 한국투자증권 실전 매매 전용 통신 규격(`FHPST01710000`)을 때려 장중 당일 코스피/코스닥 시장 전체의 거래대금 순위를 1위부터 순서대로 긁어모읍니다.
-    * **🎯 테마 대장주 추출 알고리즘:** 단순 거래량 사기 종목, ETF/인버스, 스팩주를 필터에서 영구 제거하고, 오직 **[당일 거래대금 상위 20위 내] + [주가 등락률 +4% ~ +12% 이내]** 요건을 만족하는 정순위 개별 양봉 주도주만 기계적으로 정제하여 최상단에 마운트합니다.
-
-    ---
-
-    ### 🚦 2. 장중 외국인 선물 수급 전광판 해설
-    * **🔍 HTS 실시간 동기화 검증 코드:**
-        * **키움증권 영웅문:** 메뉴 번호 `[0603]` 투자자별 매매동향 ➔ **'장중수급' / '투자자별 만기별 순매수'**
-        * **한국투자증권 HTS:** 메뉴 번호 `[0721]` 투자자별 매매동향 ➔ **'선물/파생 투자자별 누적'**
-        * ※ 두 화면 모두 구분에서 **[선물]**, 투자자에서 **[외국인]** 누적 대금을 보시면 본 화면과 100% 일치합니다.
-    * **📊 수천~수조 단위의 거대한 수치가 나오는 원인:**
-        * 종합 금융 피드 특성상 국내 코스피 지수 선물 계약 총액과 **글로벌 메이저 자금의 야간/해외 파생 상품 계약 대금(해외 나스닥 선물 등)**이 원본 바스켓에 통합 연동되어 유입되기 때문입니다.
-    * **🎯 스캘퍼의 실전 수급 신호등 활용법:**
-        * 수치의 무지막지한 크기보다 중요한 것은 **'부호(방향)'와 '실시간 변동 추이'**입니다.
-        * **🟢 초록 배너 가동 시:** 시장 하방 방어력이 최상이라는 뜻입니다. 지수 급락 우려가 없으므로 하단 단타 타깃 종목의 분봉 눌림목에 평소보다 적극적인 비중으로 자금을 베팅하십시오.
-        * **🔴 빨간 배너 경고 시:** 대형주 차익 실현 알고리즘이 가동 중입니다. 즉시 대형주 단타를 멈추고 지수와 수급이 따로 도는 독고다이 중소형 품절주나 개별 재료 급등주로 피신하십시오.
-
-    ---
-
-    ### 🖥️ 3. 전광판 레이아웃 매매 시나리오
-    1. **상단 레이더망 주시:** 장중 원/달러 환율 그래프 고점이 꺾이고, 외인 선물 계좌 부호가 강한 플러스(`+`)를 유지하는지 슬쩍 눈으로 짚습니다.
-    2. **단타 타깃 클릭:** 최상단 `🎯AI 최우선 단타 타깃` 리스트에 뜬 종목 중 마음에 드는 타깃의 왼쪽 체크박스를 선택합니다. (기본 1순위 자동 선택)
-    3. **하단 분봉 저격 타격:** 선택 즉시 하단에 자동으로 연동되어 뜨는 **[네이버 실시간 5분봉/20분봉 차트]**를 보고 세력 거래량이 터진 후 거래량이 줄어들며 이평선 지지를 받아주는 이른바 **'이쁜 숨고르기 자리(눌림목)'**에서 스캘핑 진입 타이밍을 확정합니다.
+    * **🎯 테마 대장주 추출 알고리즘:** 단순 거래량 사기 종목, ETF/인버스, 스팩주를 필터에서 영구 제거하고, 오직 **[당일 거래대금 상위 50위 내] + [주가 플러스 양봉 주도주]** 요건을 만족하는 종목들을 발라내어 대령합니다.
     """)
 
 st.markdown("---")
@@ -301,7 +295,7 @@ scalping_targets = []
 normal_display_list = []
 
 if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
-    for row in st.session_state.last_pool:
+    for idx, row in enumerate(st.session_state.last_pool):
         if isinstance(row, tuple) and len(row) == 7: 
             raw_rank, t, n, price, ctrt, amt, stat = row
             stat_prefix = ""
@@ -314,12 +308,13 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
             is_mega_cap = (t in mega_cap_codes or "하이닉스" in n or "삼성전자" in n or "현대차" in n)
             amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
 
-            if raw_rank <= 20 and (4.0 <= ctrt <= 12.0) and not is_mega_cap:
+            # 🛠️ [대표님 긴급 긴급 패치]: +12% 이상 날아간 녀석도, 50위권 내 쌩쌩한 양봉이면 무조건 포획 연사
+            if raw_rank <= 50 and (ctrt >= 3.0) and not is_mega_cap:
                 scalping_targets.append({
                     "포착순위": f"🔥 {len(scalping_targets) + 1}순위", "종목코드": t,
                     "종목명": f"🎯[단타타깃] {stat_prefix}{n}", "현재가": f"{price:,}원",
                     "등락률": f"{ctrt:+.2f}%", "당일 거래대금": amt_display,
-                    "실전 타격 지침": "🚀 거래대금 상위권 폭발! 등락률 +4%~12% 꿀맛 단타 타점 (하단 분봉 눌림목 관찰)"
+                    "실전 타격 지침": "🚀 대금 상위 폭발 주도주! 분봉 차트 눌림목 진입 찬스 점검"
                 })
             
             if raw_rank == 999: d_name, r_grade, a_tag = f"🏛️[순위권밖-강제포획] {stat_prefix}{n}", "📊 지수 연동형 메가크라운 대형주", "⚡ 한투 100위권 밖에 위치함 / 실시간 백업 엔진 자동 연동"
@@ -333,26 +328,38 @@ if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_po
                 "등락률": f"{ctrt:+.2f}%" if ctrt > 0 else f"{ctrt:.2f}%", "당일 누적대금": amt_display, "실전 행동 지침": a_tag
             })
 
+    # 🛠️ [안전 보장 가드] 조건 충족 종목이 부족해도 거래대금 최상위 5개 무조건 꽂아넣기
+    if len(scalping_targets) == 0:
+        for idx, row in enumerate(st.session_state.last_pool[:5]):
+            raw_rank, t, n, price, ctrt, amt, stat = row
+            amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
+            scalping_targets.append({
+                "포착순위": f"⚡ 고정 {idx+1}위", "종목코드": t,
+                "종목명": f"🎯[최상위대금] {n}", "현재가": f"{price:,}원",
+                "등락률": f"{ctrt:+.2f}%", "당일 거래대금": amt_display,
+                "실전 타격 지침": "🏛️ 당일 최고 대금 집중 종목 (무조건 노출 모드 가동)"
+            })
+
 df_scalping = pd.DataFrame(scalping_targets)
 df_normal = pd.DataFrame(normal_display_list)
 selected_ticker = None
 selected_name = None
 
+st.markdown("## 🎯 [대표님 전용] AI 장중 변동성 실시간 단타 최우선 타깃")
 if not df_scalping.empty:
     df_scalping.insert(0, "선택", False)
     df_scalping.loc[0, "선택"] = True
     edited_sc_df = st.data_editor(
         df_scalping, use_container_width=True, hide_index=True,
         column_config={"선택": st.column_config.CheckboxColumn(required=True)},
-        disabled=["포착순위", "종목코드", "종목명", "현재가", "등락률", "당일 거래대금", "실전 타격 지침"], height=200
+        disabled=["포착순위", "종목코드", "종목명", "현재가", "등락률", "당일 거래대금", "실전 타격 지침"], height=230
     )
     sc_selected = edited_sc_df[edited_sc_df["선택"] == True]
     if not sc_selected.empty:
         selected_ticker = sc_selected.iloc[0]["종목코드"]
         selected_name = sc_selected.iloc[0]["종목명"].split("]")[-1].strip()
-else:
-    st.info("💡 지금 이 순간에는 거래대금 상위 20위 내에서 등락률 +4% ~ +12% 규격에 맞는 안전한 단타 주도주가 없습니다. 무리한 진입 금지 / 하단 마스터 시황판을 점검해 주십시오.")
 
+st.markdown("### 📊 당일 실시간 주도주 마스터 종합 순위표 (시황 전광판)")
 if not df_normal.empty:
     if not selected_ticker:
         df_normal.insert(0, "선택", False)
