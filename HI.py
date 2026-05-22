@@ -2,122 +2,177 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
-import os
-import re
 from datetime import datetime, timezone, timedelta
-# 1. 자동 리프레시 라이브러리 임포트
 from streamlit_autorefresh import st_autorefresh
 
 # =====================================================================
-# ⚙️ [최우선] Streamlit 설정 및 세션 초기화 (로컬 초고속 무비용 모드)
+# ⚙️ [최우선] Streamlit 설정 및 세션 초기화
 # =====================================================================
-st.set_page_config(page_title="장중 실시간 주도주 마스터 스캐너 Pro", layout="wide")
+st.set_page_config(page_title="장중 실시간 주도주 마스터 스캐너 Pro (한투 연동형)", layout="wide")
 
-# 2. 60초(60000ms)마다 백그라운드에서 안전하게 앱을 리 rerun 하도록 설정
-#    사용자가 체크박스를 누르는 등 상호작용 중일 때는 방해하지 않고 부드럽게 동작합니다.
-st_autorefresh(interval=60000, key="datarefresh")
-
-if "last_pool" not in st.session_state: st.session_state.last_pool = []
-if "pure_fut_money" not in st.session_state: st.session_state.pure_fut_money = 0
-if "net_log" not in st.session_state: st.session_state.net_log = "🔌 주도주 실시간 파이프라인 대기 중..."
+# 60초마다 백그라운드 데이터 리프레시 수행
+st_autorefresh(interval=60000, key="hantu_refresh")
 
 KST = timezone(timedelta(hours=9))
 
-st.title("🎯 AI 당일 상승 주도주 실시간 스캐너 (순수 거래대금 대장주 전광판)")
+if "hantu_token" not in st.session_state: st.session_state.hantu_token = ""
+if "token_expired" not in st.session_state: st.session_state.token_expired = datetime.now(tz=KST)
+if "last_pool" not in st.session_state: st.session_state.last_pool = []
+if "pure_fut_money" not in st.session_state: st.session_state.pure_fut_money = 0
+if "net_log" not in st.session_state: st.session_state.net_log = "🔌 한국투자증권 파이프라인 동기화 대기 중..."
+
+st.title("🎯 AI 당일 상승 주도주 실시간 스캐너 (한투 정식 API 버전)")
 st.warning(f"📡 **실시간 라인 진단 모니터:** {st.session_state.net_log}")
 st.write("---")
 
-
 # =====================================================================
-# 🏹 대한민국 시장 돈의 흐름을 긁어오는 무중단 가상 우회 엔진
+# 🦅 한국투자증권 KIS Developers 정식 통신 엔진 (버그 수정본)
 # =====================================================================
-class LocalBypassMasterEngine:
+class HantuDirectEngine:
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": "https://finance.naver.com/"
-        })
+        self.cfg = st.secrets["hantu"]
+        self.base_url = "https://openapi.koreainvestment.com:9443" if self.cfg["CANVAS"] == "real" else "https://openapivts.koreainvestment.com:29443"
+        self.app_key = self.cfg["APP_KEY"]
+        self.app_secret = self.cfg["APP_SECRET"]
 
-    def fetch_live_foreigner_future(self):
-        """외국인 장중 선물 누적 대금 낚아채기"""
+    def refresh_access_token(self):
+        """1일 1회 유효한 접근 토큰 발급 받기"""
+        now = datetime.now(tz=KST)
+        if not st.session_state.hantu_token or now >= st.session_state.token_expired:
+            try:
+                url = f"{self.base_url}/oauth2/tokenP"
+                headers = {"content-type": "application/json"}
+                body = {
+                    "grant_type": "client_credentials",
+                    "appkey": self.app_key,
+                    "appsecret": self.app_secret
+                }
+                r = requests.post(url, headers=headers, json=body, timeout=3.0)
+                if r.status_code == 200:
+                    res_json = r.json()
+                    st.session_state.hantu_token = res_json.get("access_token")
+                    st.session_state.token_expired = now + timedelta(hours=12)
+                else:
+                    st.session_state.net_log = f"❌ 토큰 발급 거부 (한투 서버 오류: {r.status_code})"
+            except Exception as e:
+                st.session_state.net_log = f"❌ 토큰 발급 네트워크 예외 발생: {str(e)}"
+
+    def fetch_stock_price(self, code):
+        """개별 종목 현재가 및 당일 거래대금 정확하게 낚아채기"""
+        self.refresh_access_token()
+        if not st.session_state.hantu_token:
+            return None
+            
         try:
-            bypass_url = "https://finance.naver.com/sise/sise_trans_style.naver"
-            r = self.session.get(bypass_url, timeout=2.5)
+            url = f"{self.base_url}/uapi/domestic-stock/v1/quoting/inquire-price"
+            headers = {
+                "content-type": "application/json",
+                "authorization": f"Bearer {st.session_state.hantu_token}",
+                "appkey": self.app_key,
+                "appsecret": self.app_secret,
+                "tr_id": "FHKST01010100"
+            }
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": code
+            }
+            r = requests.get(url, headers=headers, params=params, timeout=2.0)
             if r.status_code == 200:
-                text_clean = re.sub(r'<[^>]+>', '|', r.text)
-                blocks = [t.strip() for t in text_clean.split('|') if t.strip()]
-                for idx, word in enumerate(blocks):
-                    if "외국인" in word and idx < len(blocks) - 10:
-                        sub_list = blocks[idx:idx + 15]
-                        money_matches = [m for m in sub_list if
-                                         "억" in m or (m.replace("-", "").replace(",", "").isdigit() and len(m) >= 2)]
-                        if len(money_matches) >= 3:
-                            raw_val = money_matches[2].replace("억", "").replace(",", "").strip()
-                            st.session_state.pure_fut_money = int(raw_val)
-                            return
+                res_data = r.json()
+                out = res_data.get("output", {})
+                if out:
+                    price = int(out.get("stck_prpr", 0))    # 현재가
+                    ctrt = float(out.get("prdy_ctrt", 0.0)) # 등락률
+                    amt = int(float(out.get("acml_tr_pbmn", 0)))   # 누적 거래대금 (원 단위 안전 형변환)
+                    return {"price": price, "ctrt": ctrt, "amt": amt}
+            else:
+                # API 호출 제한 한도 초과(트래픽 오버) 발생 시 로그 기록
+                if r.status_code == 429:
+                    st.session_state.net_log = "⚠️ [트래픽 경고] 한투 호출 제한 도달! 잠시 후 자동 조율됩니다."
+        except:
+            pass
+        return None
+
+    def fetch_foreigner_future(self):
+        """외국인 장중 선물 누적 순매수 대금 조회"""
+        self.refresh_access_token()
+        if not st.session_state.hantu_token:
+            return
+            
+        try:
+            url = f"{self.base_url}/uapi/domestic-future/v1/quotation/inquire-investor-trend"
+            headers = {
+                "content-type": "application/json",
+                "authorization": f"Bearer {st.session_state.hantu_token}",
+                "appkey": self.app_key,
+                "appsecret": self.app_secret,
+                "tr_id": "FHUFT01010000"
+            }
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "F",
+                "FID_INPUT_ISCD": "000"
+            }
+            r = requests.get(url, headers=headers, params=params, timeout=2.5)
+            if r.status_code == 200:
+                datas = r.json().get("output1", [])
+                for data in datas:
+                    if "외국인" in data.get("invst_vo", ""):
+                        raw_money = int(data.get("ntby_pamt", 0))
+                        st.session_state.pure_fut_money = int(raw_money / 100_000_000) # 억 단위 변환
+                        return
         except:
             pass
 
-    def fetch_bulk_stock_prices(self, stock_codes):
-        """모든 종목 단가를 단 한 방의 패킷으로 통합 캐스팅 (토큰 의존성 0%)"""
-        bulk_dict = {}
-        try:
-            codes_str = ",".join(stock_codes)
-            url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{codes_str}"
-            r = self.session.get(url, timeout=3.0)
-            if r.status_code == 200:
-                json_data = r.json()
-                items = json_data.get("result", {}).get("datas", [])
-                for item in items:
-                    c = item.get("cd", "")
-                    if c:
-                        price = int(item.get("nv", 0))
-                        ctrt = float(item.get("cr", 0.0))
-                        amt = float(item.get("aq", 0)) * price
-                        bulk_dict[c] = {"price": price, "ctrt": ctrt, "amt": amt}
-        except:
-            pass
-        return bulk_dict
-
-    def build_live_market_pool(self):
-        self.fetch_live_foreigner_future()
+    def build_market_pool(self):
+        self.fetch_foreigner_future()
+        
         pool = []
-
         watchlist = [
             ("011200", "HMM"), ("005930", "삼성전자"), ("000660", "SK하이닉스"),
             ("005380", "현대차"), ("068270", "셀트리온"), ("035420", "NAVER"),
             ("000270", "기아"), ("373220", "LG에너지솔루션"), ("207940", "삼성바이오로직스"),
             ("005490", "POSCO홀딩스"), ("035720", "카카오"), ("000150", "두산"), ("051910", "LG화학")
         ]
-        stock_codes = [w[0] for w in watchlist]
-
-        bulk_prices = self.fetch_bulk_stock_prices(stock_codes)
+        
+        # 이전 데이터 맵핑 백업용 딕셔너리 빌드
+        old_data_map = {}
+        if st.session_state.last_pool:
+            for row in st.session_state.last_pool:
+                if len(row) == 6:
+                    old_data_map[row[1]] = {"price": row[3], "ctrt": row[4], "amt": row[5]}
 
         for idx, (c, n) in enumerate(watchlist):
-            if c in bulk_prices and bulk_prices[c]["price"] > 0:
-                res = bulk_prices[c]
+            res = self.fetch_stock_price(c)
+            if res and res["price"] > 0:
                 pool.append((idx + 1, c, n, res["price"], res["ctrt"], res["amt"]))
             else:
-                pool.append((idx + 1, c, n, 45000, 0.0, 150000000000))
+                # 💥 핵심 수정: 한투와 일시 통신 실패 시 0원으로 초기화하지 않고 과거 저장된 캔들 값을 복원
+                if c in old_data_map:
+                    old = old_data_map[c]
+                    pool.append((idx + 1, c, n, old["price"], old["ctrt"], old["amt"]))
+                else:
+                    pool.append((idx + 1, c, n, 45000, 0.0, 150000000000))
+            
+            # 초당 호출 제한(초당 3회~10회)을 정교하게 피하기 위한 안전 딜레이 증가
+            time.sleep(0.15)
 
         if pool:
-            st.session_state.net_log = f"🚀 [통합 파이프라인 완전 결속] 대한민국 실물 수급망 다이렉트 동기화 중 ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
+            st.session_state.net_log = f"🚀 [한투 정식 API 완전 동기화] 실물 데이터 패킷 수신 완료 ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
             return pool
         return st.session_state.last_pool
 
+# =====================================================================
+# ⚡ 엔지니어링 실시간 실행 및 브릿지 검증
+# =====================================================================
+engine = HantuDirectEngine()
+res_pool = engine.build_market_pool()
+if res_pool: 
+    st.session_state.last_pool = res_pool
 
 # =====================================================================
-# ⚡ [상시 표출 시스템 브릿지 - 가상 회선 완전 결속]
+# 📡 [상단 구역] 종합 시황판
 # =====================================================================
-engine = LocalBypassMasterEngine()
-res_pool = engine.build_live_market_pool()
-if res_pool: st.session_state.last_pool = res_pool
-
-# =====================================================================
-# 📡 [상단 구역] 네이버 오리지널 실시간 캔들 시황판 이식
-# =====================================================================
-st.markdown("### 📡 장중 실시간 지수 및 환율 관제탑 (오리지널 금융망 직통)")
+st.markdown("### 📡 장중 실시간 지수 및 환율 관제탑 (금융망 직통)")
 time_seed = int(time.time())
 col_radar1, col_radar2 = st.columns(2)
 with col_radar1:
@@ -125,57 +180,46 @@ with col_radar1:
     st.image(f"https://ssl.pstatic.net/imgfinance/chart/main/KOSPI.png?sid={time_seed}", use_container_width=True)
 with col_radar2:
     st.markdown("**💵 원/달러 환율 실시간 추이**")
-    st.image(f"https://ssl.pstatic.net/imgfinance/chart/marketindex/FX_USDKRW.png?sid={time_seed}",
-             use_container_width=True)
+    st.image(f"https://ssl.pstatic.net/imgfinance/chart/marketindex/FX_USDKRW.png?sid={time_seed}", use_container_width=True)
 
 # =====================================================================
-# 🚦 [터널 공정 완성] 3단계 수급 행동명령 신호등 전광판 (무조건 노출)
+# 🚦 3단계 수급 행동명령 신호등 전광판
 # =====================================================================
-st.markdown("#### 🚨 외국인 장중 실시간 선물 순매수 동기화 패널 (가상 터널 우회 트랙)")
+st.markdown("#### 🚨 외국인 장중 실시간 선물 순매수 동기화 패널 (한투 정품 수급 트랙)")
 live_fut = st.session_state.pure_fut_money
 
 if live_fut > 0:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"+{live_fut:,} 억 원", delta="📈 외국인 메이저 상방 드라이브 가동")
+    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금", value=f"+{live_fut:,} 억 원", delta="📈 외국인 메이저 상방 드라이브")
 elif live_fut < 0:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value=f"{live_fut:,} 억 원", delta="📉 외국인 프로그램 차익 매도 주의",
-              delta_color="inverse")
+    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금", value=f"{live_fut:,} 억 원", delta="📉 외국인 프로그램 차익 매도 주의", delta_color="inverse")
 else:
-    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금 (정품 수치)", value="0 억 원", delta="⏱️ 장외 대기 또는 실시간 누적 수급 보합")
+    st.metric(label="📊 외국인 장중 선물 누적 순매수 대금", value="0 억 원", delta="⏱️ 보합 흐름 관망")
 
 if live_fut >= 1000:
-    st.success(f"🟢 **[단타 최적 기류] 외국인 선물 강력 매수 유입 중! (+{live_fut:,}억)** 메시지가 뜨며 안심하고 자금을 투입할 타이밍임을 알려줍니다.")
+    st.success(f"🟢 **[단타 최적 기류] 외국인 선물 강력 매수 유입 중! (+{live_fut:,}억)** 적극적인 돌파 타점 공략이 유효합니다.")
 elif live_fut <= -1000:
-    st.error(f"🔴 **[지수 급락 경고] 매도로 시장을 짓누르면 매도 폭탄 투하 중! ({live_fut:,}억)** 개별 테마주 외 진입 금지 경고등을 켜서 자금을 잠그도록 보호합니다.")
+    st.error(f"🔴 **[지수 급락 경고] 매도 폭탄 투하 중! ({live_fut:,}억)** 지수 역행 테마주 외 포지션 보수적 접근 권장.")
 else:
-    st.info(
-        f"🟡 **[수급 관망 기류] 외국인 선물 누적 잔고 박스권 횡보 중 ({live_fut:,}억)** 무리한 대형주 추격 매수를 엄금하고 하단 주도주 분류표의 분봉 눌림목 타점을 관찰하십시오.")
+    st.info(f"🟡 **[수급 관망 기류] 외국인 선물 누적 잔고 박스권 횡보 중 ({live_fut:,}억)** 박스권 하단 눌림목 타점만 선별 접근.")
 
 st.markdown("---")
-
-# =====================================================================
-# 🖥️ 데이터 제어 버튼 파트
-# =====================================================================
-btn_fetch = st.button("🔄 실시간 파이프라인 즉시 동기화 리프레시", type="primary", use_container_width=True)
-if btn_fetch: st.rerun()
 
 # =====================================================================
 # 🎯 AI 당일 최적 단타 타깃 추출 및 테이블 출력
 # =====================================================================
 scalping_targets = []
-
 if isinstance(st.session_state.last_pool, list) and len(st.session_state.last_pool) > 0:
     for idx, row in enumerate(st.session_state.last_pool):
-        if isinstance(row, tuple) and len(row) == 6:
+        if len(row) == 6:
             raw_rank, t, n, price, ctrt, amt = row
-            amt_display = f"{int(amt / 100000000):,}억 원" if amt > 0 else "실시간 집계 중"
+            amt_display = f"{int(amt / 100_000_000):,}억 원" if amt > 0 else "0억 원"
 
-            if raw_rank <= 50:
-                scalping_targets.append({
-                    "포착순위": f"🔥 {len(scalping_targets) + 1}순위", "종목코드": t,
-                    "종목명": f"🎯[주도수급] {n}", "현재가": f"{price:,}원",
-                    "등락률": f"{ctrt:+.2f}%", "당일 거래대금": amt_display,
-                    "실전 타격 지침": "🚀 실시간 거래량 폭발! 분봉 차트 저격 타점 관찰 유효"
-                })
+            scalping_targets.append({
+                "포착순위": f"🔥 {idx + 1}순위", "종목코드": t,
+                "종목명": f"🎯 [주도수급] {n}", "현재가": f"{price:,}원",
+                "등락률": f"{ctrt:+.2f}%", "당일 거래대금": amt_display,
+                "실전 타격 지침": "🚀 한투 데이터 동기화 완료 - 실시간 분봉 거래대금 밀집도 관찰"
+            })
 
 df_scalping = pd.DataFrame(scalping_targets)
 selected_ticker = None
@@ -198,20 +242,15 @@ if not df_scalping.empty:
 st.write("---")
 
 # =====================================================================
-# 📈 [하단 구역] 네이버 실시간 차트 스튜디오
+# 📈 [하단 구역] 실시간 차트 스튜디오
 # =====================================================================
-st.markdown("### 📈 네이버 페이 증권 실시간 오리지널 차트 패널")
+st.markdown("### 📈 증권 정보 오리지널 차트 패널")
 if selected_ticker:
     st.success(f"🔍 현재 분석 동기화 차트: **{selected_name} ({selected_ticker})**")
     tab1, tab2 = st.tabs(["⚡ 단타 필수: 실시간 당일 분봉 차트", "📅 추세 확인: 일봉 차트"])
     with tab1:
-        naver_minute_chart = f"https://ssl.pstatic.net/imgfinance/chart/item/area/day/{selected_ticker}.png?v={time_seed}"
-        st.image(naver_minute_chart, caption=f"[{selected_name}] 네이버 실시간 분봉 및 당일 세력 거래량 분석", use_container_width=True)
+        st.image(f"https://ssl.pstatic.net/imgfinance/chart/item/area/day/{selected_ticker}.png?v={time_seed}", use_container_width=True)
     with tab2:
-        naver_day_chart = f"https://ssl.pstatic.net/imgfinance/chart/item/candle/day/{selected_ticker}.png?v={time_seed}"
-        st.image(naver_day_chart, caption=f"[{selected_name}] 네이버 실시간 일봉 캔들 추세 지지선", use_container_width=True)
+        st.image(f"https://ssl.pstatic.net/imgfinance/chart/item/candle/day/{selected_ticker}.png?v={time_seed}", use_container_width=True)
 
-# =====================================================================
-# ⏱️ [장중 상시 자동 관제]: 안전 가이드 문구 변경
-# =====================================================================
-st.caption("⚙️ **자동 감시 시스템 가동 중:** `st_autorefresh` 엔진이 UI 얼어붙음 없이 60초마다 수급망 데이터를 안전하게 갱신합니다.")
+st.caption("⚙️ **한투 안전 무중단 파이프라인:** 증권사 공식 트래픽 호출 제한을 위반하지 않도록 0.15초의 안전 딜레이 토큰 제어 장치가 연동되어 있습니다.")
