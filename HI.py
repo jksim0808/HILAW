@@ -40,7 +40,7 @@ class HantuIntegratedEngine:
         try:
             self.cfg = st.secrets["hantu"]
             self.app_key = self.cfg["APP_KEY"]
-            self.app_secret = self.cfg["APP_SECRET"]
+            self.app_secret = self.cfg["APP_SECRET"]  
             self.canvas = self.cfg.get("CANVAS", "real")
         except Exception:
             # Secrets 미설정 시 안전 가이드 문구 주입 (키 유출 방지 백업)
