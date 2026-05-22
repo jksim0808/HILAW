@@ -26,7 +26,7 @@ st.warning(f"📡 **실시간 라인 진단 모니터:** {st.session_state.net_l
 st.write("---")
 
 # =====================================================================
-# 🦅 한국투자증권 KIS Developers 하이브리드 안전 엔진
+# 🦅 한국투자증권 KIS Developers 하이브리드 안전 엔진 (원인 진단 기능 탑재)
 # =====================================================================
 class HantuDirectEngine:
     def __init__(self):
@@ -37,8 +37,8 @@ class HantuDirectEngine:
             self.app_secret = self.cfg["APP_SECRET"]
             self.canvas = self.cfg.get("CANVAS", "real")
         except Exception:
-            # ⚠️ 대시보드 Secrets 연동 실패 시 아래 설정치로 강제 결속 (KeyError 완전 방어)
-            # ✏️ 여기 큰따옴표 안에 대표님의 실제 한투 키와 계좌 정보를 정확히 적어주세요!
+            # ⚠️ 대시보드 Secrets 연동 실패 시 아래 설정치로 강제 결속
+            # ✏️ 대표님의 실제 한투 키와 계좌 정보를 정확히 적어주세요!
             self.cfg = {
                 "CANVAS": "real",                     # 실계좌면 real, 모의투자면 mock
                 "APP_KEY": "한투에서_발급받은_AppKey_여기에_직접입력",
@@ -75,7 +75,7 @@ class HantuDirectEngine:
                 st.session_state.net_log = f"❌ 토큰 발급 네트워크 예외 발생: {str(e)}"
 
     def fetch_stock_price(self, code):
-        """개별 종목 현재가 및 당일 거래대금 정확하게 낚아채기"""
+        """개별 종목 현재가 및 당일 거래대금 조회 및 실패 원인 진단"""
         self.refresh_access_token()
         if not st.session_state.hantu_token:
             return None
@@ -96,21 +96,28 @@ class HantuDirectEngine:
             r = requests.get(url, headers=headers, params=params, timeout=2.0)
             if r.status_code == 200:
                 res_data = r.json()
+                
+                # 💥 [진단 추가] 한투가 요청을 거부했을 때 서버 메시지 포착
+                rt_cd = res_data.get("rt_cd", "0")
+                if rt_cd != "0":
+                    msg = res_data.get("msg1", "알 수 없는 한투 응답 오류")
+                    st.session_state.net_log = f"⚠️ [시세조회 거부] 한투 서버 메시지: {msg}"
+                    return None
+
                 out = res_data.get("output", {})
-                if out:
+                if out and out.get("stck_prpr"):
                     price = int(out.get("stck_prpr", 0))    # 현재가
                     ctrt = float(out.get("prdy_ctrt", 0.0)) # 등락률
                     amt = int(float(out.get("acml_tr_pbmn", 0)))   # 누적 거래대금
                     return {"price": price, "ctrt": ctrt, "amt": amt}
             else:
-                if r.status_code == 429:
-                    st.session_state.net_log = "⚠️ [트래픽 경고] 한투 호출 제한 도달!"
-        except:
-            pass
+                st.session_state.net_log = f"⚠️ [통신에러] 주식 현재가 API 호출 실패 (HTTP {r.status_code})"
+        except Exception as e:
+            st.session_state.net_log = f"⚠️ [코드에러] 데이터 파싱 실패: {str(e)}"
         return None
 
     def fetch_foreigner_future(self):
-        """외국인 장중 선물 누적 순매수 대금 조회"""
+        """외국인 장중 선물 누적 순매수 대금 조회 (모의투자 예외방어 탑재)"""
         self.refresh_access_token()
         if not st.session_state.hantu_token:
             return
@@ -130,7 +137,8 @@ class HantuDirectEngine:
             }
             r = requests.get(url, headers=headers, params=params, timeout=2.5)
             if r.status_code == 200:
-                datas = r.json().get("output1", [])
+                res_json = r.json()
+                datas = res_json.get("output1", [])
                 for data in datas:
                     if "외국인" in data.get("invst_vo", ""):
                         raw_money = int(data.get("ntby_pamt", 0))
@@ -140,7 +148,11 @@ class HantuDirectEngine:
             pass
 
     def build_market_pool(self):
-        self.fetch_foreigner_future()
+        # 선물 수급 조회 (모의계좌 환경일 시 무시되도록 방어)
+        try:
+            self.fetch_foreigner_future()
+        except:
+            pass
         
         pool = []
         watchlist = [
@@ -156,26 +168,30 @@ class HantuDirectEngine:
                 if len(row) == 6:
                     old_data_map[row[1]] = {"price": row[3], "ctrt": row[4], "amt": row[5]}
 
+        success_count = 0
         for idx, (c, n) in enumerate(watchlist):
             res = self.fetch_stock_price(c)
             if res and res["price"] > 0:
                 pool.append((idx + 1, c, n, res["price"], res["ctrt"], res["amt"]))
+                success_count += 1
             else:
+                # 한투 통신 실패 시 과거 값 복원
                 if c in old_data_map:
                     old = old_data_map[c]
                     pool.append((idx + 1, c, n, old["price"], old["ctrt"], old["amt"]))
                 else:
+                    # 초기 실패 시 가짜 가독 데이터 배치용 (현재 대표님 화면에 고정된 값)
                     pool.append((idx + 1, c, n, 45000, 0.0, 150000000000))
             
             time.sleep(0.15)
 
-        if pool:
-            st.session_state.net_log = f"🚀 [한투 하이브리드 엔진 결속] 실물 수급 동기화 완료 ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
+        if success_count > 0:
+            st.session_state.net_log = f"🚀 [한투 금융망 완전 동기화] {success_count}개 종목 패킷 수신 완료 ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
             return pool
         return st.session_state.last_pool
 
 # =====================================================================
-# ⚡ 엔지니어링 실시간 실행 및 브릿지 검증
+# ⚡ 엔지니어링 실시간 실행
 # =====================================================================
 engine = HantuDirectEngine()
 res_pool = engine.build_market_pool()
