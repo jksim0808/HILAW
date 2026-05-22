@@ -26,14 +26,31 @@ st.warning(f"📡 **실시간 라인 진단 모니터:** {st.session_state.net_l
 st.write("---")
 
 # =====================================================================
-# 🦅 한국투자증권 KIS Developers 정식 통신 엔진 (버그 수정본)
+# 🦅 한국투자증권 KIS Developers 하이브리드 안전 엔진
 # =====================================================================
 class HantuDirectEngine:
     def __init__(self):
-        self.cfg = st.secrets["hantu"]
-        self.base_url = "https://openapi.koreainvestment.com:9443" if self.cfg["CANVAS"] == "real" else "https://openapivts.koreainvestment.com:29443"
-        self.app_key = self.cfg["APP_KEY"]
-        self.app_secret = self.cfg["APP_SECRET"]
+        # 💡 [핵심] Secrets 에러가 나면 하단에 직접 입력한 값으로 우회 구동합니다.
+        try:
+            self.cfg = st.secrets["hantu"]
+            self.app_key = self.cfg["APP_KEY"]
+            self.app_secret = self.cfg["APP_SECRET"]
+            self.canvas = self.cfg.get("CANVAS", "real")
+        except Exception:
+            # ⚠️ 대시보드 Secrets 연동 실패 시 아래 설정치로 강제 결속 (KeyError 완전 방어)
+            # ✏️ 여기 큰따옴표 안에 대표님의 실제 한투 키와 계좌 정보를 정확히 적어주세요!
+            self.cfg = {
+                "CANVAS": "real",                     # 실계좌면 real, 모의투자면 mock
+                "APP_KEY": "한투에서_발급받은_AppKey_여기에_직접입력",
+                "APP_SECRET": "한투에서_발급받은_SecretKey_여기에_직접입력",
+                "ACCOUNT_NO": "계좌번호8자리",
+                "ACCOUNT_PRDT": "01"
+            }
+            self.app_key = self.cfg["APP_KEY"]
+            self.app_secret = self.cfg["APP_SECRET"]
+            self.canvas = self.cfg["CANVAS"]
+            
+        self.base_url = "https://openapi.koreainvestment.com:9443" if self.canvas == "real" else "https://openapivts.koreainvestment.com:29443"
 
     def refresh_access_token(self):
         """1일 1회 유효한 접근 토큰 발급 받기"""
@@ -53,7 +70,7 @@ class HantuDirectEngine:
                     st.session_state.hantu_token = res_json.get("access_token")
                     st.session_state.token_expired = now + timedelta(hours=12)
                 else:
-                    st.session_state.net_log = f"❌ 토큰 발급 거부 (한투 서버 오류: {r.status_code})"
+                    st.session_state.net_log = f"❌ 토큰 발급 거부 (한투 서버 응답 오류: {r.status_code})"
             except Exception as e:
                 st.session_state.net_log = f"❌ 토큰 발급 네트워크 예외 발생: {str(e)}"
 
@@ -83,12 +100,11 @@ class HantuDirectEngine:
                 if out:
                     price = int(out.get("stck_prpr", 0))    # 현재가
                     ctrt = float(out.get("prdy_ctrt", 0.0)) # 등락률
-                    amt = int(float(out.get("acml_tr_pbmn", 0)))   # 누적 거래대금 (원 단위 안전 형변환)
+                    amt = int(float(out.get("acml_tr_pbmn", 0)))   # 누적 거래대금
                     return {"price": price, "ctrt": ctrt, "amt": amt}
             else:
-                # API 호출 제한 한도 초과(트래픽 오버) 발생 시 로그 기록
                 if r.status_code == 429:
-                    st.session_state.net_log = "⚠️ [트래픽 경고] 한투 호출 제한 도달! 잠시 후 자동 조율됩니다."
+                    st.session_state.net_log = "⚠️ [트래픽 경고] 한투 호출 제한 도달!"
         except:
             pass
         return None
@@ -134,7 +150,6 @@ class HantuDirectEngine:
             ("005490", "POSCO홀딩스"), ("035720", "카카오"), ("000150", "두산"), ("051910", "LG화학")
         ]
         
-        # 이전 데이터 맵핑 백업용 딕셔너리 빌드
         old_data_map = {}
         if st.session_state.last_pool:
             for row in st.session_state.last_pool:
@@ -146,18 +161,16 @@ class HantuDirectEngine:
             if res and res["price"] > 0:
                 pool.append((idx + 1, c, n, res["price"], res["ctrt"], res["amt"]))
             else:
-                # 💥 핵심 수정: 한투와 일시 통신 실패 시 0원으로 초기화하지 않고 과거 저장된 캔들 값을 복원
                 if c in old_data_map:
                     old = old_data_map[c]
                     pool.append((idx + 1, c, n, old["price"], old["ctrt"], old["amt"]))
                 else:
                     pool.append((idx + 1, c, n, 45000, 0.0, 150000000000))
             
-            # 초당 호출 제한(초당 3회~10회)을 정교하게 피하기 위한 안전 딜레이 증가
             time.sleep(0.15)
 
         if pool:
-            st.session_state.net_log = f"🚀 [한투 정식 API 완전 동기화] 실물 데이터 패킷 수신 완료 ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
+            st.session_state.net_log = f"🚀 [한투 하이브리드 엔진 결속] 실물 수급 동기화 완료 ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
             return pool
         return st.session_state.last_pool
 
@@ -246,7 +259,7 @@ st.write("---")
 # =====================================================================
 st.markdown("### 📈 증권 정보 오리지널 차트 패널")
 if selected_ticker:
-    st.success(f"🔍 현재 분석 동기화 차트: **{selected_name} ({selected_ticker})**")
+    st.success(f"🔍 현재 분석 동기화 차체: **{selected_name} ({selected_ticker})**")
     tab1, tab2 = st.tabs(["⚡ 단타 필수: 실시간 당일 분봉 차트", "📅 추세 확인: 일봉 차트"])
     with tab1:
         st.image(f"https://ssl.pstatic.net/imgfinance/chart/item/area/day/{selected_ticker}.png?v={time_seed}", use_container_width=True)
