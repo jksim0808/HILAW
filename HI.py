@@ -26,19 +26,21 @@ st.warning(f"📡 **실시간 라인 진단 모니터:** {st.session_state.net_l
 st.write("---")
 
 # =====================================================================
-# 🦅 한국투자증권 KIS Developers 하이브리드 안전 엔진 (403 세션 청소기 탑재)
+# 🦅 한국투자증권 KIS Developers 하이브리드 엔진 (정밀 진단 기능형)
 # =====================================================================
 class HantuDirectEngine:
     def __init__(self):
+        # 💡 [진단] 1차로 Streamlit Secrets를 열어봅니다.
         try:
             self.cfg = st.secrets["hantu"]
             self.app_key = self.cfg["APP_KEY"]
             self.app_secret = self.cfg["APP_SECRET"]
             self.canvas = self.cfg.get("CANVAS", "real")
         except Exception:
-            # ⚠️ Secrets 연동 오류 시 직접 주입 백업 트랙
+            # 💡 2차로 대시보드 Secrets 세팅이 안 되어있다면 아래 직접 주입 값을 백업으로 사용합니다.
+            # ⚠️ [필수 확인] 여기에 대표님의 실제 한국투자증권 키값들을 직접 입력하셔야 가동됩니다!
             self.cfg = {
-                "CANVAS": "real",                     
+                "CANVAS": "real",                     # 실계좌면 real, 모의투자면 mock
                 "APP_KEY": "한투에서_발급받은_AppKey_여기에_직접입력",
                 "APP_SECRET": "한투에서_발급받은_SecretKey_여기에_직접입력",
                 "ACCOUNT_NO": "계좌번호8자리",
@@ -51,10 +53,14 @@ class HantuDirectEngine:
         self.base_url = "https://openapi.koreainvestment.com:9443" if self.canvas == "real" else "https://openapivts.koreainvestment.com:29443"
 
     def refresh_access_token(self, force_refresh=False):
-        """1일 1회 유효한 접근 토큰 발급 받기 (강제 리셋 기능 추가)"""
+        """1일 1회 유효한 접근 토큰 발급 받기 (미입력 진단 기능 추가)"""
         now = datetime.now(tz=KST)
         
-        # 💥 403 오류 검출로 인해 강제 리셋 신호가 오거나 토큰이 만료된 경우
+        # 💥 [치명적 원인 사전 차단] 가짜 안내 문구가 그대로 들어있거나 비어있는지 검사
+        if "입력" in self.app_key or not self.app_key or "AppKey" in self.app_key:
+            st.session_state.net_log = "❌ [설정 오류] 코드 내부(43번째 줄) 혹은 Secrets창에 '실제 한투 AppKey'를 기입하셔야 파이프라인이 뚫립니다!"
+            return False
+
         if force_refresh or not st.session_state.hantu_token or now >= st.session_state.token_expired:
             try:
                 url = f"{self.base_url}/oauth2/tokenP"
@@ -64,23 +70,26 @@ class HantuDirectEngine:
                     "appkey": self.app_key,
                     "appsecret": self.app_secret
                 }
-                r = requests.post(url, headers=headers, json=body, timeout=3.0)
+                r = requests.post(url, headers=headers, json=body, timeout=4.0)
                 if r.status_code == 200:
                     res_json = r.json()
                     st.session_state.hantu_token = res_json.get("access_token")
                     st.session_state.token_expired = now + timedelta(hours=12)
+                    return True
                 else:
-                    st.session_state.hantu_token = "" # 실패 시 기존 찌꺼기 완벽 제거
-                    st.session_state.net_log = f"❌ 토큰 발급 거부 (한투 서버 응답 오류: {r.status_code})"
+                    st.session_state.hantu_token = ""
+                    st.session_state.net_log = f"❌ 토큰 발급 거부 (한투 서버 응답 코드: {r.status_code})"
+                    return False
             except Exception as e:
                 st.session_state.hantu_token = ""
-                st.session_state.net_log = f"❌ 토큰 발급 네트워크 예외 발생: {str(e)}"
+                st.session_state.net_log = f"❌ 한투 서버 접속 차단 (네트워크 에러): {str(e)}"
+                return False
+        return True
 
     def fetch_stock_price(self, code):
-        """개별 종목 현재가 조회 (403 실시간 방어망 가동)"""
+        """개별 종목 현재가 조회"""
         if not st.session_state.hantu_token:
-            self.refresh_access_token()
-            if not st.session_state.hantu_token: return None
+            return None
             
         try:
             url = f"{self.base_url}/uapi/domestic-stock/v1/quoting/inquire-price"
@@ -97,9 +106,7 @@ class HantuDirectEngine:
             }
             r = requests.get(url, headers=headers, params=params, timeout=2.0)
             
-            # 💥 중요: 호출 도중 403 Forbidden이 뜨면 현재 토큰을 파괴하고 즉시 재발급 트랙 가동
             if r.status_code == 403:
-                st.session_state.net_log = "⚠️ [세션 충돌 발견] 구형 토큰 무효화 처리 및 자동 재생성 시도..."
                 self.refresh_access_token(force_refresh=True)
                 return None
 
@@ -156,8 +163,10 @@ class HantuDirectEngine:
             pass
 
     def build_market_pool(self):
-        # 1. 먼저 깨끗하게 토큰 상태 유효성 체크
-        self.refresh_access_token()
+        # 1. 무조건 강력하게 토큰부터 생성 및 검증 시도
+        is_token_ok = self.refresh_access_token()
+        if not is_token_ok:
+            return st.session_state.last_pool
         
         try:
             self.fetch_foreigner_future()
@@ -194,7 +203,7 @@ class HantuDirectEngine:
             time.sleep(0.15)
 
         if success_count > 0:
-            st.session_state.net_log = f"🚀 [한투 세션 자동 정화 완료] {success_count}개 종목 패킷 수신 성공 ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
+            st.session_state.net_log = f"🚀 [한투 금융망 실시간 결속 완수] {success_count}개 종목 패킷 동기화 ({datetime.now(tz=KST).strftime('%H:%M:%S')})"
             return pool
         return st.session_state.last_pool
 
